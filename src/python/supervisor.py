@@ -4,24 +4,24 @@ import sys
 import atexit
 import subprocess
 import time
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
 from multiprocessing import shared_memory
 
 # --- CONFIGURATION ---
-# Note: Python shared memory name does not need the leading slash on some systems,
-# but shm_open in C++ usually requires it. Python's shared_memory module handles the platform differences.
-# However, to be safe with cross-language, we align names carefully.
-# In Python multiprocessing.shared_memory, passing name="name" usually maps to "/dev/shm/name" or "/name".
-# C++ used "/offering_tensor_shm". Python should try "offering_tensor_shm" or "/offering_tensor_shm".
-SHM_NAME = "/offering_tensor_shm"
-REPORT_PIPE_PATH = "/tmp/offering_report"
-COMMAND_PIPE_PATH = "/tmp/offering_command"
+# Default Configuration
+DEFAULT_SHM_NAME = "/offering_tensor_shm"
+DEFAULT_REPORT_PIPE = "/tmp/offering_report"
+DEFAULT_COMMAND_PIPE = "/tmp/offering_command"
 TENSOR_SIZE_BYTES = 4096 * 4  # 4096 float32s
 
 class OfferingSupervisor:
-    def __init__(self):
+    def __init__(self, model_xml=None, tokenizer_id=None, shm_name=DEFAULT_SHM_NAME):
+        self.shm_name = shm_name
+        self.model_xml = model_xml
+        self.tokenizer_id = tokenizer_id
         self.shm = None
         self.process = None
         self.report_fd = None
@@ -29,18 +29,18 @@ class OfferingSupervisor:
         self.gpu_shard = None
 
     def setup_resources(self):
-        print(f"[Supervisor] Initializing Resources...")
+        print(f"[Supervisor] Initializing Resources (SHM: {self.shm_name})...")
 
         # Cleanup any stale pipes
-        if os.path.exists(REPORT_PIPE_PATH): os.remove(REPORT_PIPE_PATH)
-        if os.path.exists(COMMAND_PIPE_PATH): os.remove(COMMAND_PIPE_PATH)
+        if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
+        if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
 
-        os.mkfifo(REPORT_PIPE_PATH, 0o666)
-        os.mkfifo(COMMAND_PIPE_PATH, 0o666)
+        os.mkfifo(DEFAULT_REPORT_PIPE, 0o666)
+        os.mkfifo(DEFAULT_COMMAND_PIPE, 0o666)
 
         # We rely on C++ to create the Shared Memory, but we can try to cleanup stale one first
         try:
-            temp = shared_memory.SharedMemory(name=SHM_NAME)
+            temp = shared_memory.SharedMemory(name=self.shm_name)
             temp.close()
             temp.unlink()
             print("[Supervisor] Cleaned up stale shared memory.")
@@ -59,7 +59,16 @@ class OfferingSupervisor:
             print(f"[Error] C++ Binary not found at {binary_path}. Please compile first.")
             sys.exit(1)
 
-        self.process = subprocess.Popen([binary_path],
+        # In a real implementation, we might pass the model path to the C++ binary via args
+        # e.g., [binary_path, "--model", self.model_xml]
+        # For now, we assume the C++ binary is generic or uses a config.
+        cmd = [binary_path]
+        if self.model_xml:
+            # We don't implement arg parsing in C++ yet, but this shows intent
+            # cmd.extend(["--model", self.model_xml])
+            print(f"[Supervisor] Note: Targeting model {self.model_xml} for NPU execution.")
+
+        self.process = subprocess.Popen(cmd,
                                         stdout=sys.stdout,
                                         stderr=sys.stderr,
                                         text=True)
@@ -68,7 +77,7 @@ class OfferingSupervisor:
         print("[Supervisor] Waiting for Executive READY signal...")
 
         # Open pipe for reading (blocking open until C++ opens for writing)
-        self.report_fd = os.open(REPORT_PIPE_PATH, os.O_RDONLY | os.O_NONBLOCK)
+        self.report_fd = os.open(DEFAULT_REPORT_PIPE, os.O_RDONLY | os.O_NONBLOCK)
 
         # Poll for READY
         ready = False
@@ -88,22 +97,25 @@ class OfferingSupervisor:
              self.cleanup()
              sys.exit(1)
 
-        print("[Supervisor] Executive is READY. Attaching to Shared Memory...")
+        print(f"[Supervisor] Executive is READY. Attaching to Shared Memory {self.shm_name}...")
         try:
-            self.shm = shared_memory.SharedMemory(name=SHM_NAME)
+            self.shm = shared_memory.SharedMemory(name=self.shm_name)
             # Create a NumPy view of the raw RAM (Zero-Copy)
             self.tensor_view = np.ndarray((4096,), dtype=np.float32, buffer=self.shm.buf)
             print("[Supervisor] Shared Memory Attached.")
         except FileNotFoundError:
-             print(f"[Error] Shared memory {SHM_NAME} not found. C++ failed to create it?")
+             print(f"[Error] Shared memory {self.shm_name} not found. C++ failed to create it?")
              self.cleanup()
              sys.exit(1)
 
         # Open Command Pipe
-        self.command_fd = os.open(COMMAND_PIPE_PATH, os.O_WRONLY)
+        self.command_fd = os.open(DEFAULT_COMMAND_PIPE, os.O_WRONLY)
 
     def load_gpu_shard(self):
         print("[Supervisor] Loading GPU Shard (PyTorch)...")
+        if self.tokenizer_id:
+             print(f"[Supervisor] Using Tokenizer: {self.tokenizer_id}")
+
         # Placeholder for actual GPU model loading
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -165,13 +177,24 @@ class OfferingSupervisor:
         if self.report_fd: os.close(self.report_fd)
         if self.command_fd: os.close(self.command_fd)
 
-        if os.path.exists(REPORT_PIPE_PATH): os.remove(REPORT_PIPE_PATH)
-        if os.path.exists(COMMAND_PIPE_PATH): os.remove(COMMAND_PIPE_PATH)
+        if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
+        if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
 
         print("[Cleanup] Done.")
 
 if __name__ == "__main__":
-    supervisor = OfferingSupervisor()
+    parser = argparse.ArgumentParser(description="New Offering Supervisor")
+    parser.add_argument("--model_xml", type=str, default=None, help="Path to OpenVINO XML model (NPU Shard)")
+    parser.add_argument("--tokenizer_id", type=str, default=None, help="HuggingFace ID or path for Tokenizer")
+    parser.add_argument("--shm_name", type=str, default=DEFAULT_SHM_NAME, help="Shared Memory Segment Name")
+
+    args = parser.parse_args()
+
+    supervisor = OfferingSupervisor(
+        model_xml=args.model_xml,
+        tokenizer_id=args.tokenizer_id,
+        shm_name=args.shm_name
+    )
     atexit.register(supervisor.cleanup)
 
     supervisor.setup_resources()

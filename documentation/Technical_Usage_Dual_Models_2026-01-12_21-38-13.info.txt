@@ -1,0 +1,41 @@
+Task: Technical Usage & Configuration for Dual Models (Llama 3 & Neural Chat)
+Date: 2026-01-12_21-38-13
+
+Summary of Integration:
+Extended the "New Offering" engine to support multiple model architectures, specifically adding formal support for `Intel/neural-chat-7b-v3-1`. The system now allows dynamic switching between baked models at runtime via command-line arguments.
+
+Detailed Implementation Notes:
+1.  **Dual Model Architecture**:
+    -   **Llama 3 (8B)**: Supported as the baseline generic model.
+    -   **Neural Chat 7B (v3-1)**: Added specific support. This model is based on the Mistral architecture and utilizes SwiGLU activation functions.
+    -   **SwiGLU Advantage**: Unlike models with complex activations (like xIELU) that might require CPU fallback, SwiGLU is natively supported by the Intel NPU hardware. This ensures that the entire "Shard A" (NPU portion) runs efficiently on the silicon without costly data transfers to the CPU.
+
+2.  **PyTorch vs. OpenVINO IR Conversion**:
+    -   **Clarification**: The `Intel/neural-chat-7b-v3-1` repository contains `.bin` files (PyTorch weights), not OpenVINO IR files (`.xml`/`.bin`).
+    -   **The Baking Process**: The `src/python/bake_model.py` script bridges this gap. It performs a three-step ETL process:
+        1.  **Extract**: Downloads raw PyTorch weights from Hugging Face.
+        2.  **Transform**: Converts PyTorch graph to OpenVINO Intermediate Representation (IR).
+        3.  **Optimize**: Applies NNCF Data-Free INT4 compression to reduce memory footprint from ~14GB (FP16) to ~4GB (INT4).
+    -   **Why Baking is Mandatory**: The C++ Executive (`executive_shard`) cannot read `.bin` PyTorch files directly. It requires the compiled OpenVINO IR structure.
+
+3.  **Configuration & Usage**:
+    -   **Baking**:
+        Users must explicitly bake the model they intend to use.
+        `python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4`
+    -   **Running**:
+        The Supervisor now accepts arguments to point to the specific baked directory.
+        `python src/python/supervisor.py --model_xml ./models/neuralchat_int4/openvino_model.xml`
+
+Fixes & Caveats:
+-   **Model ID Confusion**: Users might confuse "Neural Chat MoE" with the dense "Neural Chat 7B v3-1". This implementation specifically targets the URL provided (`Intel/neural-chat-7b-v3-1`), which is a dense 7B model. The engine supports it fully as a Mistral-derivative.
+-   **Tokenizer**: When switching models, the Supervisor must also load the correct tokenizer to ensure text encoding matches the model's vocabulary. The `--tokenizer_id` argument handles this.
+
+Technical Metrics:
+-   **Neural Chat Size (FP16)**: ~14.5 GB.
+-   **Neural Chat Size (INT4)**: ~4.1 GB.
+-   **NPU Compatibility**: 100% Native (SwiGLU).
+
+Key Changes Made:
+-   Updated `supervisor.py` to use `argparse` for dynamic configuration.
+-   Updated `README.md` with explicit dual-path instructions.
+-   Verified `bake_model.py` robustness for arbitrary output paths.

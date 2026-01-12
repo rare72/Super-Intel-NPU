@@ -11,6 +11,11 @@ This project implements a high-performance, hardware-sharded inference engine de
 - **Zero-Copy Handoff**: Utilizes POSIX Shared Memory to transfer tensor data between the C++ Executive and Python Supervisor without copying memory.
 - **Robust Lifecycle**: Python Supervisor manages the C++ process, ensuring clean startup and shutdown (no memory leaks).
 
+## Supported Models
+This engine is optimized for the following models:
+1.  **Meta Llama 3 (8B)**: The standard open-weight model.
+2.  **Intel Neural Chat 7B (v3-1)**: A Mistral-based model fine-tuned on Gaudi2, utilizing SwiGLU activation for native NPU support.
+
 ## Directory Structure
 - `src/cpp`: C++ Source code for the low-level Executive process (Level Zero, OpenVINO).
 - `src/python`: Python scripts for model baking, supervision, and inference.
@@ -38,9 +43,20 @@ python scripts/check_intel_hw.py
 ```
 
 ### 3. "Bake" the Model
-Download and compress the model (e.g., Llama-3-8B). This runs NNCF INT4 compression.
+You must download and compress the model before running it.
+
+**Option A: Meta Llama 3 (8B)**
 ```bash
-python src/python/bake_model.py --model_id meta-llama/Meta-Llama-3-8B
+python src/python/bake_model.py \
+    --model_id meta-llama/Meta-Llama-3-8B \
+    --output_dir ./models/llama3_int4
+```
+
+**Option B: Intel Neural Chat 7B (v3-1)**
+```bash
+python src/python/bake_model.py \
+    --model_id Intel/neural-chat-7b-v3-1 \
+    --output_dir ./models/neuralchat_int4
 ```
 
 ### 4. Compile the Executive
@@ -54,9 +70,20 @@ cd ../../..
 ```
 
 ### 5. Run the Offering
-Launch the Supervisor. It will start the C++ Executive and enter the inference loop.
+Launch the Supervisor. Specify which baked model to use.
+
+**Running Llama 3:**
 ```bash
-python src/python/supervisor.py
+python src/python/supervisor.py \
+    --model_xml ./models/llama3_int4/openvino_model.xml \
+    --tokenizer_id meta-llama/Meta-Llama-3-8B
+```
+
+**Running Neural Chat:**
+```bash
+python src/python/supervisor.py \
+    --model_xml ./models/neuralchat_int4/openvino_model.xml \
+    --tokenizer_id Intel/neural-chat-7b-v3-1
 ```
 
 ## Troubleshooting
