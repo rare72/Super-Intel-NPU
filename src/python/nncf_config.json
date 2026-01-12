@@ -1,0 +1,9 @@
+{
+    "bits": 4,
+    "sym": false,
+    "group_size": 128,
+    "ratio": 1.0,
+    "awq": true,
+    "scale_estimation": true,
+    "all_layers": false
+}

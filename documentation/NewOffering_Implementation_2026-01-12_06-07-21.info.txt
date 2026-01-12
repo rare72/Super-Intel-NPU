@@ -1,0 +1,52 @@
+Task: New Offering Implementation (Intel Core Ultra Hybrid Inference)
+Date: 2026-01-12_06-07-21
+
+Summary of Changes:
+Implemented a complete "New Offering" architecture for running Large Language Models on Intel Core Ultra hardware. The solution uses a hybrid approach:
+- NPU (Neural Processing Unit) handles the initial transformer layers.
+- GPU (Intel Arc / CUDA) handles the remaining layers.
+- Communication is achieved via POSIX Shared Memory for zero-copy tensor transfer and Named Pipes for command/control.
+- The model is compressed to INT4 using NNCF (Data-Free) to fit within memory bandwidth constraints.
+
+Detailed Implementation Notes:
+1.  **Environment Setup (`scripts/setup_env.sh`)**:
+    -   Automated the installation of `libze` (Level Zero), `openvino-dev`, `nncf`, and `optimum-intel`.
+    -   Configured a Python virtual environment to isolate dependencies.
+
+2.  **Model Baking (`src/python/bake_model.py`)**:
+    -   Implemented a script to download Open-Weight models (e.g., Llama-3).
+    -   Used `optimum.intel.OVModelForCausalLM` with `quantization_config` to apply NNCF compression.
+    -   Configured "Accuracy-Aware" parameters (`awq`, `scale_estimation`) in `src/python/nncf_config.json`.
+
+3.  **C++ Executive (`src/cpp/executive_shard.cpp`)**:
+    -   Developed a standalone C++ application linked against OpenVINO and Level Zero.
+    -   Implemented `discover_hardware()` to identify NPU/GPU at the driver level.
+    -   Used `shm_open` and `mmap` to allocate a 4KB (example) float32 tensor buffer in RAM.
+    -   Implemented a Named Pipe listener loop to receive "PROCESS" commands and signal "DATA_READY".
+
+4.  **Python Supervisor (`src/python/supervisor.py`)**:
+    -   Created a "Supervisor" class to manage the lifecycle.
+    -   Uses `subprocess` to launch the C++ binary.
+    -   Attaches to the Shared Memory segment using `numpy` for zero-copy access.
+    -   Implements `atexit` cleanup to remove `/dev/shm` segments and `/tmp` pipes, preventing resource leaks.
+
+Fixes & Caveats:
+-   **Hardware Dependency**: The C++ compilation requires Intel Level Zero headers (`ze_api.h`). In environments without these headers (like standard CI/CD containers), CMake will warn/fail. The `package_release.sh` script is designed to handle this gracefully by skipping compilation if tools are missing.
+-   **NPU/GPU Split**: The current inference loop in `supervisor.py` simulates the GPU handoff (printing the tensor value) to ensure functional logic without requiring a 16GB VRAM GPU in the dev environment. The code structure for `torch.cuda` loading is present but guarded.
+-   **Shared Memory Permissions**: Requires access to `/dev/shm` and `/tmp`. Standard Linux user permissions are usually sufficient, but security-hardened kernels might require configuration.
+
+Usage Instructions:
+1.  **Setup**: `./scripts/setup_env.sh`
+2.  **Bake**: `python src/python/bake_model.py --model_id [MODEL_ID]`
+3.  **Compile**: `cd src/cpp/build && cmake .. && make`
+4.  **Run**: `python src/python/supervisor.py`
+
+Technical Metrics:
+-   **Quantization**: INT4 (Asymmetric, Group Size 128).
+-   **Communication Latency**: < 1ms (estimated) via Shared Memory vs > 10ms via standard Pipes/Sockets.
+-   **Memory Overhead**: Minimal (Shared Memory buffer is static).
+
+Key Changes Made:
+-   **Directory Shift**: All documentation is stored in `documentation/` as requested.
+-   **Auto-Creation Logic**: Scripts verify and create directories (`build`, `release_package`) automatically.
+-   **Schema Adherence**: Followed the `[task_name]_[timestamp].info.txt` convention.
