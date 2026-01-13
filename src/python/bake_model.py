@@ -54,36 +54,32 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             ov_model = core.read_model(xml_path)
 
             # Inspect and Apply Reshape
-            # NPU (Level Zero) often fails with unbounded dynamic shapes (e.g., -1).
-            # We enforce Batch Size = 1 and Sequence Length = 1..4096 (Bounded Dynamic) or Static.
-            # Using partial shape with bounds is the most robust method for 2025/2026 drivers.
-
             new_shapes = {}
+            # Apply to ALL inputs regardless of static check to be safe
             for input_node in ov_model.inputs:
-                # Assuming standard inputs: input_ids, attention_mask, position_ids
-                # Shape is usually [batch, seq_len]
-                # We set [1, 1..4096]
                 partial_shape = input_node.get_partial_shape()
-                if partial_shape.rank.is_static and len(partial_shape) >= 2:
-                    # Create bounded dimension for sequence length
+
+                # Default to [1, 1..4096] for 2+ dims (usually input_ids, attention_mask)
+                if len(partial_shape) >= 2:
                     # Dimension(min, max)
                     batch_dim = ov.Dimension(1)
                     seq_dim = ov.Dimension(1, 4096)
 
                     new_shape = [batch_dim, seq_dim]
-                    # Preserve other dimensions if any (e.g. past_key_values if present in inputs)
+                    # Preserve other dimensions if any
                     if len(partial_shape) > 2:
                         for i in range(2, len(partial_shape)):
                             new_shape.append(partial_shape[i])
 
                     new_shapes[input_node.any_name] = ov.PartialShape(new_shape)
-                    print(f"    > Reshaping {input_node.any_name} to {new_shape}")
+                    print(f"    > Reshaping {input_node.any_name} to {new_shape} (Original: {partial_shape})")
 
-            ov_model.reshape(new_shapes)
-
-            # Overwrite the model
-            ov.save_model(ov_model, xml_path)
-            print(">>> [Bake] Remediation Complete: Model saved with bounded shapes.")
+            if new_shapes:
+                ov_model.reshape(new_shapes)
+                ov.save_model(ov_model, xml_path)
+                print(">>> [Bake] Remediation Complete: Model saved with bounded shapes.")
+            else:
+                print("[Warning] No suitable inputs found to reshape.")
         else:
             print("[Warning] XML file not found for reshaping.")
 
