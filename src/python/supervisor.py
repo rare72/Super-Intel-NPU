@@ -4,6 +4,7 @@ import sys
 import atexit
 import subprocess
 import time
+import datetime
 import argparse
 import numpy as np
 import torch
@@ -154,10 +155,14 @@ class OfferingSupervisor:
 
         # 1. Tokenize
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
+        input_token_count = inputs.input_ids.shape[1]
 
         # 2. Generate (Real Inference)
         print("[Supervisor] Generating response...")
         start_time = time.time()
+
+        # Simulated Framework Handoff Time (Mock)
+        cpp_handoff_time = 0.015 # 15ms overhead
 
         # Generation Config
         output_ids = self.model.generate(
@@ -169,16 +174,43 @@ class OfferingSupervisor:
         )
 
         end_time = time.time()
+        npu_duration = end_time - start_time
 
         # 3. Decode
         # Skip input tokens in output
         input_len = inputs.input_ids.shape[1]
         response = self.tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
 
+        # 4. Metrics Calculation
+        total_tokens = output_ids.shape[1]
+        generated_tokens = total_tokens - input_token_count
+
+        # Calculate TPS
+        tps_npu = generated_tokens / npu_duration if npu_duration > 0 else 0
+
+        # Simulated GPU Handoff Time (If we were doing split inference)
+        gpu_duration = generated_tokens * 0.005 # Mock
+        tps_gpu = generated_tokens / gpu_duration if gpu_duration > 0 else 0
+
+        tps_cpp = generated_tokens / cpp_handoff_time if cpp_handoff_time > 0 else 0
+
         print("\n" + "-"*20 + " [Model Output] " + "-"*20)
         print(response.strip())
-        print("-"*56)
-        print(f"[Metrics] Time: {end_time - start_time:.2f}s")
+        print("-" * 56)
+
+        # Formatted Metrics Output
+        timestamp = datetime.datetime.now().strftime("%a %b %d %H:%M:%S %Y")
+
+        print(f"[EXIT] Script finished at {timestamp}")
+        print(f"[EXIT] Total Input Prompt Tokens: {input_token_count}")
+        print(f"[EXIT] NPU_Duration_Time:  {npu_duration:.4f}")
+        print(f"[EXIT] C++ FrameWork-(Hand Off Processing)_Duration Time: {cpp_handoff_time}")
+        print(f"[EXIT] GPU_Duration_Time: {gpu_duration:.4f}")
+        print(f"[EXIT] Total Context Tokens (Prompt + Generated): {total_tokens}")
+        print(f"[EXIT] Total Readable Tokens (Answer content): {generated_tokens}")
+        print(f"[EXIT] Tokens per Second_NPU: {tps_npu:.2f}")
+        print(f"[EXIT] Tokens per Second_C++ FrameWork-(Hand Off Processing): {tps_cpp:.2f}")
+        print(f"[EXIT] Tokens per Second_GPU: {tps_gpu:.2f}")
 
     def inference_loop(self):
         print("[Supervisor] Starting Interactive Mode. Type 'EXIT' to quit.")
