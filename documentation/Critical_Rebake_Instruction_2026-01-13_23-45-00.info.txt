@@ -1,0 +1,29 @@
+Task: Critical Rebake Instruction
+Date: 2026-01-13_23-45-00
+
+CRITICAL NOTICE: RE-BAKE REQUIRED
+
+Summary of Incident:
+Despite updating the codebase to enforce static shapes (`[1, 1024]`), the runtime environment continued to report dynamic shape errors (`Upper bounds are not specified...`). This confirms that the user was executing inference against an **old, unmodified** version of the baked model stored on disk.
+
+Root Cause:
+-   The `bake_model.py` script applies reshaping *during* the conversion process.
+-   Updating the Python script *does not* retroactively fix the binary `.xml` files already saved in `./models/neuralchat_int4`.
+-   The NPU driver reads the `.xml`, sees the old dynamic shapes (`[-1, -1]`), and crashes immediately.
+
+Remediation Action:
+Users **MUST** perform a clean re-bake of the model to apply the new static constraints.
+
+Command Checklist:
+1.  **Delete** the old model:
+    `rm -rf ./models/neuralchat_int4`
+    `rm -rf ./models/llama3_int4`
+
+2.  **Run** the Bake Script (which now contains the Fix):
+    `python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4`
+
+3.  **Run** Inference:
+    `python src/python/supervisor.py ...`
+
+Technical Verification:
+-   The new bake script includes a verification step that reloads the model and asserts no dynamic dimensions exist. If the bake succeeds, the file on disk is guaranteed to be NPU-safe.
