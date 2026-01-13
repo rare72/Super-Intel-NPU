@@ -71,20 +71,21 @@ cd ../../..
 ```
 
 ### 5. Run the Offering
-Launch the Supervisor. Specify which baked model to use.
+Launch the Supervisor to generate text. You can run in interactive mode or single-shot mode.
 
-**Running Llama 3:**
+**Interactive Mode:**
 ```bash
 python src/python/supervisor.py \
-    --model_xml ./models/llama3_int4/openvino_model.xml \
-    --tokenizer_id meta-llama/Meta-Llama-3-8B
+    --model_xml ./models/neuralchat_int4 \
+    --tokenizer_id Intel/neural-chat-7b-v3-1
 ```
 
-**Running Neural Chat:**
+**Single-Shot Prompting (Real Inference):**
 ```bash
 python src/python/supervisor.py \
-    --model_xml ./models/neuralchat_int4/openvino_model.xml \
-    --tokenizer_id Intel/neural-chat-7b-v3-1
+    --model_xml ./models/neuralchat_int4 \
+    --tokenizer_id Intel/neural-chat-7b-v3-1 \
+    --prompt "What are the benefits of NPU inference?"
 ```
 
 ## Troubleshooting
