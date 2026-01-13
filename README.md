@@ -18,13 +18,15 @@ This engine is optimized for the following models:
 
 ## Prerequisites
 - **Hardware**: Intel Core Ultra Processor (Series 1 or 2) with NPU and Arc Graphics.
-- **OS**: Linux (Ubuntu 22.04 / 24.04 or compatible).
+- **OS**: Linux (Ubuntu 24.04 Noble Numbat recommended).
 - **Drivers**: Intel Level Zero GPU & NPU drivers (installed via setup script).
 
 ## Quick Start
 
 ### 1. Environment Setup
-Run the setup script. This script **adds the Intel Graphics Package Repository** and installs necessary system drivers (`libze`, `opencl`, etc.). You may be prompted for your `sudo` password.
+Run the setup script. This script **adds the Intel Graphics Package Repository** and installs necessary system drivers (`libze`, `opencl`, etc.).
+
+**Note for Ubuntu 24.04 Users:** The script automatically handles the modern package naming (`libegl1` vs `libegl1-mesa`).
 
 ```bash
 ./scripts/setup_env.sh
@@ -82,7 +84,15 @@ python src/python/supervisor.py \
 ```
 
 ## Troubleshooting
-- **CMake Error "Level Zero not found"**: Ensure `libze-dev` is installed (handled by setup script).
-- **Shared Memory Errors**: Ensure `/dev/shm` is mounted and you have permissions (standard on most Linux distros).
-- **NPU not found**: Verify kernel version (6.8+ recommended) and `intel-level-zero-npu` package.
-- **Setup Script Errors**: If `setup_env.sh` fails to find packages, ensure you have internet access and that the Intel repository was added correctly to `/etc/apt/sources.list.d/`.
+
+### Setup Script Fails on Ubuntu 24.04
+If you see errors about `libegl1-mesa` or `intel-level-zero-gpu` not being found:
+1.  Ensure you have internet access so the Intel GPG key can be downloaded.
+2.  The script has been updated to use `libegl1` (the modern package name). Rerun `./scripts/setup_env.sh`.
+3.  If issues persist, verify you have the `universe` and `multiverse` repositories enabled in Ubuntu.
+
+### NPU Not Visible
+If `check_intel_hw.py` does not list 'NPU':
+1.  Verify you are in the `render` group: `groups $USER`.
+2.  Check `dmesg | grep intel_vpu` to see if the kernel driver loaded.
+3.  Reboot your system after running the setup script.
