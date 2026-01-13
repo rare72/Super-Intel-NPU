@@ -1,0 +1,30 @@
+Task: NPU Shape Remediation (Fixing Dynamic Shape Errors)
+Date: 2026-01-13_19-35-30
+
+Summary of Updates:
+Modified the model baking pipeline to enforce bounded dynamic shapes (`1..4096`) on the OpenVINO IR. This resolves the specific Intel Level Zero compiler errors related to unbounded dynamic dimensions (`INT64_MAX`) which were causing NPU inference to fail and fall back to CPU.
+
+Detailed Implementation Notes:
+1.  **The "Shape Problem"**:
+    -   Error: `Upper bounds are not specified for node...` and `to_shape was called on a dynamic shape`.
+    -   Cause: Standard export produces dynamic dimensions like `[-1, -1]`. The Intel NPU compiler needs to allocate memory buffers ahead of time and cannot handle purely unbounded axes.
+    -   Fix: Implemented a "Remediation Step" in `bake_model.py`.
+
+2.  **The Remediation Logic**:
+    -   After `optimum-intel` exports the model, the script reloads the `.xml` using `openvino.runtime.Core`.
+    -   It iterates through all inputs (`input_ids`, `attention_mask`) and replaces the shapes with `[1, 1..4096]`.
+    -   `1`: Fixed Batch Size (Crucial for NPU efficiency).
+    -   `1..4096`: Bounded Dynamic Sequence Length. This tells the compiler "allocate for 4096, but allow runtime variation," preventing the `9223372036854775807` (INT64_MAX) error.
+
+3.  **Usage Impact**:
+    -   Users must **re-bake** their models for this fix to take effect.
+    -   `python src/python/bake_model.py ...`
+    -   No changes required to `supervisor.py` command arguments.
+
+Fixes & Caveats:
+-   **Re-Baking Required**: Existing models in `./models` will still fail. The user must delete them and run the bake script again.
+-   **Context Limit**: The hardcoded limit is 4096 tokens. If longer context is needed, the `bake_model.py` script must be edited.
+
+Technical Metrics:
+-   **Target Shape**: `[1, 1..4096]`.
+-   **Compiler Error**: `ZE_RESULT_ERROR_INVALID_ARGUMENT` (Resolved by providing bounds).
