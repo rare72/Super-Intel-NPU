@@ -21,10 +21,10 @@ wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
   $SUDO gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics.gpg
 
 # Detect Ubuntu Codename (e.g., noble, jammy)
-# If lsb_release is missing, default to noble for 24.04
 if command -v lsb_release &> /dev/null; then
     CODENAME=$(lsb_release -cs)
 else
+    # Fallback/Default to Noble (24.04) as this is the target OS
     CODENAME="noble"
 fi
 
@@ -38,19 +38,25 @@ echo ">>> Updating apt repositories with Intel source..."
 $SUDO apt update
 
 echo ">>> Installing Intel Level Zero, OpenCL, and Build Tools..."
-# Using DEBIAN_FRONTEND=noninteractive to avoid prompts
+# Ubuntu 24.04 (Noble) Specific Fixes:
+# - Replaced legacy 'libegl1-mesa' with 'libegl1'
+# - Added 'libtbb12' and 'libgl1-mesa-dev' explicitly
+# - Using DEBIAN_FRONTEND=noninteractive to avoid prompts
+
 $SUDO DEBIAN_FRONTEND=noninteractive apt install -y \
+    libegl1 \
+    libgl1-mesa-dev \
+    libgbm1 \
+    libtbb12 \
+    libze1 \
+    libze-dev \
     intel-opencl-icd \
     intel-level-zero-gpu \
     level-zero \
     intel-media-va-driver-non-free \
     libmfxgen1 \
     libvpl2 \
-    libegl-mesa0 \
-    libegl1-mesa \
     libegl1-mesa-dev \
-    libgbm1 \
-    libgl1-mesa-dev \
     libgl1-mesa-dri \
     libglapi-mesa \
     libgles2-mesa-dev \
@@ -67,10 +73,12 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt install -y \
     cmake \
     build-essential \
     python3-venv \
-    python3-dev
+    python3-dev \
+    python3-pip
 
 # Attempt NPU specific driver if not covered by above
-$SUDO DEBIAN_FRONTEND=noninteractive apt install -y intel-level-zero-npu || echo ">>> Note: intel-level-zero-npu package not explicitly found (might be included in main packages)."
+# Note: In some Intel repos, this package might be named differently or included in level-zero-gpu
+$SUDO DEBIAN_FRONTEND=noninteractive apt install -y intel-level-zero-npu || echo ">>> Note: intel-level-zero-npu package not explicitly found (might be included in main packages or manually installed)."
 
 # 3. User Groups
 echo ">>> Adding user to 'render' group for hardware access..."
@@ -84,8 +92,11 @@ VENV_PATH="$PROJECT_ROOT/venv_offering"
 
 echo ">>> Setting up Python Virtual Environment at: $VENV_PATH"
 
+# Always recreate or ensure venv exists
 if [ ! -d "$VENV_PATH" ]; then
     python3 -m venv "$VENV_PATH"
+else
+    echo ">>> Virtual environment already exists. Updating..."
 fi
 
 # Activate venv for this script execution
@@ -96,7 +107,7 @@ pip install --upgrade pip
 
 echo ">>> Installing Python Dependencies..."
 pip install "optimum-intel[openvino,nncf]" \
-    "openvino-dev>=2025.0.0" \
+    "openvino>=2025.0.0" \
     "huggingface-hub" \
     "torch" \
     "setuptools" \
