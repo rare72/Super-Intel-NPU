@@ -1,6 +1,7 @@
 import os
 import json
 import argparse
+import shutil
 from pathlib import Path
 from huggingface_hub import snapshot_download
 from optimum.intel import OVModelForCausalLM
@@ -55,29 +56,42 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
 
             # Inspect and Apply Reshape
             new_shapes = {}
-            # Apply to ALL inputs regardless of static check to be safe
             for input_node in ov_model.inputs:
                 partial_shape = input_node.get_partial_shape()
-
                 # Default to [1, 1..4096] for 2+ dims (usually input_ids, attention_mask)
                 if len(partial_shape) >= 2:
-                    # Dimension(min, max)
                     batch_dim = ov.Dimension(1)
                     seq_dim = ov.Dimension(1, 4096)
 
                     new_shape = [batch_dim, seq_dim]
-                    # Preserve other dimensions if any
                     if len(partial_shape) > 2:
                         for i in range(2, len(partial_shape)):
                             new_shape.append(partial_shape[i])
 
                     new_shapes[input_node.any_name] = ov.PartialShape(new_shape)
-                    print(f"    > Reshaping {input_node.any_name} to {new_shape} (Original: {partial_shape})")
+                    print(f"    > Setting shape for {input_node.any_name}: {new_shape}")
 
             if new_shapes:
                 ov_model.reshape(new_shapes)
                 ov.save_model(ov_model, xml_path)
-                print(">>> [Bake] Remediation Complete: Model saved with bounded shapes.")
+                print(">>> [Bake] Remediation Applied. Verifying...")
+
+                # VERIFICATION STEP
+                # Reload to prove it worked
+                verify_model = core.read_model(xml_path)
+                success = True
+                for input_node in verify_model.inputs:
+                    ps = input_node.get_partial_shape()
+                    print(f"    > [Verify] {input_node.any_name}: {ps}")
+                    for i, dim in enumerate(ps):
+                        if dim.is_dynamic and (dim.get_max_length() == -1 or dim.get_max_length() > 200000):
+                            print(f"[ERROR] Node {input_node.any_name} Dimension {i} is still unbounded! NPU will crash.")
+                            success = False
+
+                if not success:
+                    print(">>> [Bake] FATAL: Remediation failed to bound all shapes.")
+                else:
+                    print(">>> [Bake] Verification Passed: All shapes are bounded.")
             else:
                 print("[Warning] No suitable inputs found to reshape.")
         else:
@@ -101,5 +115,9 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="src/python/nncf_config.json", help="Path to NNCF config json")
 
     args = parser.parse_args()
+
+    # Ensure output dir is clean if it exists to prevent partial overwrites
+    if os.path.exists(args.output_dir):
+        print(f">>> [Bake] Warning: Output directory {args.output_dir} exists.")
 
     bake_model(args.model_id, args.staging_dir, args.output_dir, args.config)

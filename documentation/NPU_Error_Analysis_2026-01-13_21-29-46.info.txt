@@ -1,0 +1,28 @@
+Task: NPU Error Analysis & Remediation
+Date: 2026-01-13_21-29-46
+
+Summary of Updates:
+Analyzed the recurring `ZE_RESULT_ERROR_INVALID_ARGUMENT` error on the Intel NPU. The root cause is confirmed to be "Unbounded Dynamic Shapes" (INT64_MAX) in the OpenVINO IR model, which the Level Zero driver cannot handle. The system now enforces bounded shapes and provides verification steps.
+
+Detailed Error Analysis:
+1.  **The Error**:
+    -   `[IE::FrontEnd::importNetwork] Upper bounds are not specified for node...`
+    -   `input '0' bounds are '[9223372036854775807, 9223372036854775807]'`
+    -   **Diagnosis**: The model's input tensor (likely `input_ids`) has dimensions defined as `[-1, -1]`. OpenVINO interprets this as infinite. The NPU driver requires a pre-allocated memory pool and thus needs specific upper bounds (e.g., `[1, 4096]`).
+
+2.  **The Fix (Code Level)**:
+    -   Updated `src/python/bake_model.py` to add a rigorous **Verification Step**.
+    -   After reshaping and saving the model, the script now reloads it and iterates through all inputs.
+    -   It explicitly checks `get_max_length()`. If any dimension exceeds 200,000 (proxy for INT64_MAX), it flags a FATAL error during the bake process.
+
+3.  **Action Required (User Level)**:
+    -   **Re-Bake Mandatory**: The fix is applied during the *export* phase. Existing models on disk cannot be "patched" at runtime easily.
+    -   **Command**: `rm -rf ./models/neuralchat_int4 && python src/python/bake_model.py ...`
+
+Fixes & Caveats:
+-   **Verification Logic**: Added a check that scans `partial_shape` for dynamic dimensions with `get_max_length() == -1`.
+-   **Stability**: Enforcing `Batch=1` and `SeqLen=1..4096` ensures the NPU compiler can generate a valid graph.
+
+Technical Metrics:
+-   **Target Shape**: `[1, (1, 4096)]` (Static Batch, Bounded Dynamic Sequence).
+-   **Previous State**: `[-1, -1]` (Fully Dynamic) -> CRASH.

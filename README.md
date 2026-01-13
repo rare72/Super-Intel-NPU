@@ -47,8 +47,11 @@ python scripts/check_intel_hw.py
 ### 3. "Bake" the Model
 You must download and compress the model before running it.
 
+**IMPORTANT:** If you encounter `ZE_RESULT_ERROR_INVALID_ARGUMENT` or shape errors, you MUST delete the output directory and re-run this command.
+
 **Option A: Meta Llama 3 (8B)**
 ```bash
+rm -rf ./models/llama3_int4
 python src/python/bake_model.py \
     --model_id meta-llama/Meta-Llama-3-8B \
     --output_dir ./models/llama3_int4
@@ -56,6 +59,7 @@ python src/python/bake_model.py \
 
 **Option B: Intel Neural Chat 7B (v3-1)**
 ```bash
+rm -rf ./models/neuralchat_int4
 python src/python/bake_model.py \
     --model_id Intel/neural-chat-7b-v3-1 \
     --output_dir ./models/neuralchat_int4
@@ -116,3 +120,8 @@ If `verify_install.py` does not list 'NPU':
 1.  Verify you are in the `render` group: `groups $USER`.
 2.  Check `dmesg | grep intel_vpu` to see if the kernel driver loaded.
 3.  Reboot your system after running the setup script.
+
+### ZE_RESULT_ERROR_INVALID_ARGUMENT / Dynamic Shape Error
+If the supervisor logs `Upper bounds are not specified` or `to_shape was called on a dynamic shape`:
+1.  This means the model on disk does not have NPU-compatible shapes.
+2.  **Fix:** Delete your baked model directory (e.g., `rm -rf ./models/neuralchat_int4`) and re-run `bake_model.py`. The new script enforces bounded shapes.
