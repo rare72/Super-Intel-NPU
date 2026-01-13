@@ -77,7 +77,6 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt install -y \
     python3-pip
 
 # Attempt NPU specific driver if not covered by above
-# Note: In some Intel repos, this package might be named differently or included in level-zero-gpu
 $SUDO DEBIAN_FRONTEND=noninteractive apt install -y intel-level-zero-npu || echo ">>> Note: intel-level-zero-npu package not explicitly found (might be included in main packages or manually installed)."
 
 # 3. User Groups
@@ -113,11 +112,9 @@ pip install "optimum-intel[openvino,nncf]" \
     "setuptools" \
     "numpy"
 
-# 5. Verification
-echo ">>> Verifying Installation..."
-cmake --version
-python --version
-python -c "import openvino; print(f'OpenVINO version: {openvino.runtime.get_version()}')"
+# 5. Verification (Step 4 Final Verification)
+echo ">>> Verifying Installation (Final Verification)..."
+python3 -c "import openvino as ov; core = ov.Core(); print('\n' + '='*25 + '\nSUCCESS! Available Devices:', core.available_devices, '\n' + '='*25)"
 
 echo ">>> Setup Complete!"
 echo ">>> IMPORTANT: Please REBOOT your machine for driver changes to take effect."

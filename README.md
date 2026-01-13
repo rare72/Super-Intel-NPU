@@ -36,6 +36,10 @@ source venv_offering/bin/activate
 ### 2. Verify Hardware
 Check if your NPU is visible to the drivers.
 ```bash
+python scripts/verify_install.py
+```
+Or use the detailed check:
+```bash
 python scripts/check_intel_hw.py
 ```
 
@@ -92,7 +96,7 @@ If you see errors about `libegl1-mesa` or `intel-level-zero-gpu` not being found
 3.  If issues persist, verify you have the `universe` and `multiverse` repositories enabled in Ubuntu.
 
 ### NPU Not Visible
-If `check_intel_hw.py` does not list 'NPU':
+If `verify_install.py` does not list 'NPU':
 1.  Verify you are in the `render` group: `groups $USER`.
 2.  Check `dmesg | grep intel_vpu` to see if the kernel driver loaded.
 3.  Reboot your system after running the setup script.
