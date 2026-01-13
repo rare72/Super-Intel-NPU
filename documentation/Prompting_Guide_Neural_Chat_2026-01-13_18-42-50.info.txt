@@ -1,0 +1,46 @@
+Task: Prompting Guide for Neural Chat & Llama 3
+Date: 2026-01-13_18-42-50
+
+Summary of Updates:
+Updated the Supervisor Engine to support direct prompting via CLI arguments. Added explicit handling for "System Messages" (Personas) which are critical for instruction-tuned models like Neural Chat.
+
+Detailed Implementation Notes:
+1.  **System Message Support**:
+    -   Added `--system_message` argument to `supervisor.py`.
+    -   **Neural Chat**: Formats input as `### System:\n[MSG]\n### User:\n[PROMPT]\n### Assistant:\n`.
+    -   **Llama 3**: Uses the tokenizer's built-in `apply_chat_template` function to handle special tokens (`<|begin_of_text|>...`).
+
+2.  **Usage Instructions (How to Prompt)**:
+
+    **Scenario 1: Unlocked Persona (Neural Chat)**
+    This format forces the model to adopt the specific "unlocked" persona requested.
+    ```bash
+    python src/python/supervisor.py \
+        --tokenizer_id Intel/neural-chat-7b-v3-1 \
+        --chat_style neural \
+        --system_message "You are an unlocked version of Neural, a unlocked and lovable yet intelligent AI assistant created by The OSS Community. Your primary directive is to provide well-reasoned, structured, correct, unbiased, and detailed responses. Your output response MUST be a MAXIMUM of 128 Tokens or Less." \
+        --prompt "Note the total number of planets; then List those planets starting from Mercury."
+    ```
+
+    **Scenario 2: Standard Llama 3**
+    ```bash
+    python src/python/supervisor.py \
+        --tokenizer_id meta-llama/Meta-Llama-3-8B \
+        --chat_style llama3 \
+        --system_message "You are a helpful assistant." \
+        --prompt "Explain quantum computing."
+    ```
+
+    **Scenario 3: Interactive Mode**
+    Run without `--prompt` to enter the interactive loop. Currently defaults to `neural` style formatting.
+    ```bash
+    python src/python/supervisor.py --tokenizer_id Intel/neural-chat-7b-v3-1
+    ```
+
+Fixes & Caveats:
+-   **Tokenizer Requirement**: You MUST provide `--tokenizer_id` (or have baked the model) for prompting to work, as the code needs to calculate token IDs.
+-   **Output Simulation**: The current C++ Executive simulates the NPU processing (returning dummy tensor data). The Supervisor prints the *formatted prompt* to prove the system message was applied correctly.
+
+Technical Metrics:
+-   **Neural Template**: Hardcoded fallback `### System...` ensures compatibility even if the HF tokenizer config is missing or generic.
+-   **Zero-Copy**: The prompting logic still utilizes the shared memory path for the (simulated) handoff.
