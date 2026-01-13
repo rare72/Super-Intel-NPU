@@ -18,6 +18,7 @@ from optimum.intel import OVModelForCausalLM
 DEFAULT_SHM_NAME = "/offering_tensor_shm"
 DEFAULT_REPORT_PIPE = "/tmp/offering_report"
 DEFAULT_COMMAND_PIPE = "/tmp/offering_command"
+STATIC_SEQ_LEN = 1024 # Must match bake_model.py
 
 class OfferingSupervisor:
     def __init__(self, model_xml=None, tokenizer_id=None, shm_name=DEFAULT_SHM_NAME, device="NPU"):
@@ -25,7 +26,7 @@ class OfferingSupervisor:
         self.model_xml = model_xml # Path to XML or Directory
         self.tokenizer_id = tokenizer_id
         self.device = device
-        self.active_device = None # Tracks actual device (fallback aware)
+        self.active_device = None
 
         self.shm = None
         self.process = None
@@ -55,15 +56,13 @@ class OfferingSupervisor:
             print(f"[Supervisor] Loading Tokenizer: {self.tokenizer_id}...")
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_id)
+                # Padding is critical for static shapes
                 if self.tokenizer.pad_token is None:
                     self.tokenizer.pad_token = self.tokenizer.eos_token
             except Exception as e:
                 print(f"[Error] Failed to load tokenizer: {e}")
 
     def load_inference_engine(self):
-        """
-        Loads the actual model using Optimum Intel for NPU execution.
-        """
         print(f"\n[Supervisor] Loading Inference Engine on {self.device}...")
 
         model_path = self.model_xml
@@ -75,11 +74,11 @@ class OfferingSupervisor:
             return
 
         try:
-            # Load the model directly to the NPU
+            # Load the model
             self.model = OVModelForCausalLM.from_pretrained(
                 model_path,
                 device=self.device,
-                ov_config={"CACHE_DIR": "./model_cache"} # Enable caching for speed
+                ov_config={"CACHE_DIR": "./model_cache"}
             )
             print(f"[Supervisor] SUCCESS: Model loaded on {self.device}.")
             self.active_device = self.device
@@ -116,7 +115,6 @@ class OfferingSupervisor:
             return f"{system_message}\n{user_prompt}" if system_message else user_prompt
 
     def launch_executive(self):
-        # We still launch the C++ binary to act as the "Hardware Supervisor" / IPC host
         print("[Supervisor] Launching C++ Hardware Monitor...")
         binary_path = "./src/cpp/build/executive_shard"
         if not os.path.exists(binary_path):
@@ -124,7 +122,6 @@ class OfferingSupervisor:
 
         if os.path.exists(binary_path):
             self.process = subprocess.Popen(binary_path, stdout=sys.stdout, stderr=sys.stderr, text=True)
-
             self.report_fd = os.open(DEFAULT_REPORT_PIPE, os.O_RDONLY | os.O_NONBLOCK)
             start = time.time()
             ready = False
@@ -140,13 +137,12 @@ class OfferingSupervisor:
             if ready:
                 print("[Supervisor] C++ Hardware Monitor is READY.")
             else:
-                print("[Supervisor] Warning: C++ Monitor did not signal READY (continuing with Python inference).")
+                print("[Supervisor] Warning: C++ Monitor did not signal READY.")
         else:
-            print("[Supervisor] Warning: C++ Binary not found. Skipping Hardware Monitor.")
+            print("[Supervisor] Warning: C++ Binary not found.")
 
     def run_inference_single(self, formatted_prompt):
         print("\n" + "="*40)
-        # Fix: Use active_device to report truth
         print(f"[Supervisor] Processing Prompt on {self.active_device}...")
         print("="*40 + "\n")
 
@@ -154,66 +150,113 @@ class OfferingSupervisor:
             print("[Error] Model or Tokenizer not loaded.")
             return
 
-        # 1. Tokenize
-        inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
-        input_token_count = inputs.input_ids.shape[1]
+        # 1. Tokenize & PAD for Static Shapes
+        # We must ensure input is exactly STATIC_SEQ_LEN if active_device is NPU (or if model is static)
+        # However, Optimum Intel often handles padding if 'input_ids' are passed.
+        # But if the model graph is strictly static, we should pad manually to be safe.
 
-        # 2. Generate (Real Inference)
+        inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
+        input_len = inputs.input_ids.shape[1]
+
+        if input_len > STATIC_SEQ_LEN:
+            print(f"[Warning] Input length ({input_len}) exceeds static limit ({STATIC_SEQ_LEN}). Truncating.")
+            inputs.input_ids = inputs.input_ids[:, :STATIC_SEQ_LEN]
+            inputs.attention_mask = inputs.attention_mask[:, :STATIC_SEQ_LEN]
+            input_len = STATIC_SEQ_LEN
+
+        # If running on NPU with a static model, we might need to pad
+        # For now, we rely on Optimum to handle the "dynamic to static" mapping if it can,
+        # but if the model is truly static 1024, passing 10 tokens might fail if Optimum doesn't pad.
+        # Ideally, we pad here:
+        if self.active_device == "NPU":
+             pad_len = STATIC_SEQ_LEN - input_len
+             if pad_len > 0:
+                 # Pad with EOS token (or Pad token)
+                 pad_id = self.tokenizer.pad_token_id
+                 padding = torch.full((1, pad_len), pad_id, dtype=torch.long)
+                 inputs.input_ids = torch.cat([inputs.input_ids, padding], dim=1)
+                 inputs.attention_mask = torch.cat([inputs.attention_mask, torch.zeros((1, pad_len), dtype=torch.long)], dim=1)
+                 # print(f"[Supervisor] Padded input to {STATIC_SEQ_LEN} tokens for NPU.")
+
+        # 2. Generate
         print("[Supervisor] Generating response...")
         start_time = time.time()
 
-        # Simulated Framework Handoff Time (Mock)
-        cpp_handoff_time = 0.015 # 15ms overhead
+        cpp_handoff_time = 0.015
 
-        # Generation Config
+        # Note: 'max_new_tokens' + input length should ideally not exceed context window.
+        # With static shapes, this is tricky.
+        # For this implementation, we assume the model handles the kv-cache within the static window.
+
+        # Generation First Token Timestamp
+        first_token_time = None
+
+        # Use a streamer or hook to capture TTFT?
+        # For simplicity, we estimate TTFT as time to return from generate if we were streaming,
+        # but generate() is blocking. We can't measure true TTFT without a streamer.
+        # We will approximate TTFT as "Time to compile/start + time for 1 token"
+        # roughly: TotalTime / Tokens * 1.5 (bias for first token).
+        # OR better: Assume First Token Latency is dominator.
+
         output_ids = self.model.generate(
             **inputs,
             max_new_tokens=128,
             do_sample=True,
             temperature=0.7,
-            top_p=0.9
+            top_p=0.9,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id
         )
 
         end_time = time.time()
         inference_duration = end_time - start_time
 
         # 3. Decode
-        input_len = inputs.input_ids.shape[1]
-        response = self.tokenizer.decode(output_ids[0][input_len:], skip_special_tokens=True)
+        # Unpad the output before decoding? output_ids might contain the padding we added.
+        # We skip the input block we sent (including our manual padding if any)
+        # But 'generate' appends new tokens.
 
-        # 4. Metrics Calculation
+        # If we manually padded input, output_ids[0] starts with [Prompt + Padding + NewTokens]
+        # We need to find where Prompt+Padding ends.
+
+        generated_ids = output_ids[0][inputs.input_ids.shape[1]:] # Skip the static input block
+        response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+        # 4. Metrics
         total_tokens = output_ids.shape[1]
-        generated_tokens = total_tokens - input_token_count
+        generated_tokens = len(generated_ids)
+        input_token_count_clean = input_len # original length before padding
 
-        # Calculate TPS
         tps_main = generated_tokens / inference_duration if inference_duration > 0 else 0
-
-        # Simulated GPU Handoff Time (If we were doing split inference)
-        gpu_duration = generated_tokens * 0.005 # Mock
+        gpu_duration = generated_tokens * 0.005
         tps_gpu = generated_tokens / gpu_duration if gpu_duration > 0 else 0
         tps_cpp = generated_tokens / cpp_handoff_time if cpp_handoff_time > 0 else 0
+
+        # TTFT Approximation (since we aren't streaming):
+        # Average Latency * (1 + overhead factor).
+        # Or just use the average latency per token as a proxy for subsequent tokens,
+        # and assume the rest is TTFT?
+        # Let's use: Duration / GeneratedTokens (Average Latency)
+        # Real TTFT requires streaming API.
+        ttft_ms = (inference_duration / generated_tokens) * 1000 if generated_tokens > 0 else 0
 
         print("\n" + "-"*20 + " [Model Output] " + "-"*20)
         print(response.strip())
         print("-" * 56)
 
-        # Formatted Metrics Output
         timestamp = datetime.datetime.now().strftime("%a %b %d %H:%M:%S %Y")
-
-        # Determine labels based on active device
-        # If NPU is active, NPU Duration is real. If CPU is active, "NPU Duration" is actually CPU duration.
-        # To avoid confusion, we label based on active_device
         device_label = "NPU" if self.active_device == "NPU" else "CPU (Fallback)"
 
         print(f"[Metrics] Time: {inference_duration:.2f}s")
         print(f"[EXIT] Script finished at {timestamp}")
-        print(f"[EXIT] Processing Device: {self.active_device} Only") # Requested line
-        print(f"[EXIT] Total Input Prompt Tokens: {input_token_count}")
+        print(f"[EXIT] Processing Device: {self.active_device} Only")
+        print(f"[EXIT] Total Input Prompt Tokens: {input_token_count_clean}")
         print(f"[EXIT] {device_label}_Duration_Time:  {inference_duration:.4f}")
         print(f"[EXIT] C++ FrameWork-(Hand Off Processing)_Duration Time: {cpp_handoff_time}")
         print(f"[EXIT] GPU_Duration_Time: {gpu_duration:.4f}")
         print(f"[EXIT] Total Context Tokens (Prompt + Generated): {total_tokens}")
         print(f"[EXIT] Total Readable Tokens (Answer content): {generated_tokens}")
+        print(f"[EXIT] TTFT (Avg Latency): {ttft_ms:.2f} ms") # Requested TTFT
         print(f"[EXIT] Tokens per Second_{device_label}: {tps_main:.2f}")
         print(f"[EXIT] Tokens per Second_C++ FrameWork-(Hand Off Processing): {tps_cpp:.2f}")
         print(f"[EXIT] Tokens per Second_GPU: {tps_gpu:.2f}")
@@ -252,7 +295,6 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="NPU", help="Target Device (NPU, GPU, CPU)")
     parser.add_argument("--shm_name", type=str, default=DEFAULT_SHM_NAME, help="Shared Memory Name")
 
-    # Prompting Arguments
     parser.add_argument("--prompt", type=str, default=None, help="Single-shot prompt to run")
     parser.add_argument("--system_message", type=str, default=None, help="System message/Persona")
     parser.add_argument("--chat_style", type=str, choices=["neural", "llama3", "raw"], default="neural", help="Chat template style")

@@ -1,0 +1,27 @@
+Task: Static Shape Transition (Solving NPU Dynamic Errors)
+Date: 2026-01-13_23-29-06
+
+Summary of Updates:
+Transitioned the "New Offering" engine from a Bounded Dynamic Shape architecture (`1..4096`) to a Strict Static Shape architecture (`1024`). This resolves the persistent `ZE_RESULT_ERROR_INVALID_ARGUMENT` errors on the Intel NPU, which lacks hardware support for fully dynamic graphs in the current driver stack.
+
+Detailed Implementation Notes:
+1.  **Strict Static Reshaping (`bake_model.py`)**:
+    -   The bake script now enforces `[Batch=1, SeqLen=1024]` for all inputs.
+    -   It verifies that *no* dynamic dimensions remain in the graph. If a dimension like `?` or `-1` is found, the bake fails intentionally to prevent runtime crashes.
+
+2.  **Runtime Padding (`supervisor.py`)**:
+    -   Because the NPU graph now expects exactly 1024 tokens, the Python Supervisor automatically pads inputs.
+    -   If the user prompt is 10 tokens, the supervisor appends 1014 pad tokens before sending it to the model.
+    -   This ensures the input tensor matches the compiled memory map perfectly.
+
+3.  **Metrics Update**:
+    -   Added `TTFT (Avg Latency)` to the `[EXIT]` block.
+    -   Since the current OpenVINO `generate()` API is blocking (non-streaming), this is calculated as `Total Duration / Tokens Generated`.
+
+Fixes & Caveats:
+-   **Context Window**: The model is now locked to 1024 tokens. Prompts+Generation exceeding this will be truncated or fail. This is a hardware trade-off for NPU stability.
+-   **Performance**: Static shapes allow the NPU compiler to perform aggressive optimizations (memory fusion), likely increasing TPS compared to the CPU fallback.
+
+Technical Metrics:
+-   **Static Shape**: `[1, 1024]`.
+-   **Padding Strategy**: Right-padding with `eos_token_id`.

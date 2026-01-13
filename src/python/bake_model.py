@@ -8,6 +8,10 @@ from optimum.intel import OVModelForCausalLM
 from transformers import AutoTokenizer
 import openvino as ov
 
+# --- CONSTANTS ---
+STATIC_SEQ_LEN = 1024
+STATIC_BATCH_SIZE = 1
+
 def bake_model(model_id, staging_dir, output_dir, config_path):
     """
     Downloads, Converts to IR, Applies NNCF INT4 Compression, and Reshapes for NPU.
@@ -45,53 +49,66 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
     model.save_pretrained(output_dir)
 
     # 5. NPU Shape Remediation (Post-Processing)
-    print(">>> [Bake] Remediation: Reshaping model for NPU compatibility...")
+    print(f">>> [Bake] Remediation: Enforcing STRICT STATIC shapes [{STATIC_BATCH_SIZE}, {STATIC_SEQ_LEN}]...")
     try:
         core = ov.Core()
         xml_path = os.path.join(output_dir, "openvino_model.xml")
-        bin_path = os.path.join(output_dir, "openvino_model.bin")
 
         if os.path.exists(xml_path):
             ov_model = core.read_model(xml_path)
 
-            # Inspect and Apply Reshape
             new_shapes = {}
             for input_node in ov_model.inputs:
                 partial_shape = input_node.get_partial_shape()
-                # Default to [1, 1..4096] for 2+ dims (usually input_ids, attention_mask)
-                if len(partial_shape) >= 2:
-                    batch_dim = ov.Dimension(1)
-                    seq_dim = ov.Dimension(1, 4096)
 
-                    new_shape = [batch_dim, seq_dim]
+                # Check if this input looks like [batch, seq_len, ...]
+                # We target dimensions that are commonly dynamic
+                if len(partial_shape) >= 2:
+                    # STRICT STATIC SHAPES
+                    # We are locking the model to exactly 1024 tokens.
+                    # Supervisor MUST pad inputs to this length.
+
+                    new_shape_list = []
+                    # Dimension 0: Batch
+                    new_shape_list.append(STATIC_BATCH_SIZE)
+                    # Dimension 1: Sequence Length
+                    new_shape_list.append(STATIC_SEQ_LEN)
+
+                    # Preserve remaining dimensions (e.g. hidden size, past_key_values)
+                    # Usually remaining dims are already static in exported models
                     if len(partial_shape) > 2:
                         for i in range(2, len(partial_shape)):
-                            new_shape.append(partial_shape[i])
+                            dim = partial_shape[i]
+                            if dim.is_static:
+                                new_shape_list.append(dim.get_length())
+                            else:
+                                # If internal dims are dynamic, we must assume a standard head size or
+                                # try to keep it dynamic if the driver allows, but usually we want static.
+                                # For safety, we keep it as-is if it's not the main seq axis.
+                                new_shape_list.append(dim)
 
-                    new_shapes[input_node.any_name] = ov.PartialShape(new_shape)
-                    print(f"    > Setting shape for {input_node.any_name}: {new_shape}")
+                    new_shapes[input_node.any_name] = ov.PartialShape(new_shape_list)
+                    print(f"    > Locking {input_node.any_name} to {new_shape_list}")
 
             if new_shapes:
                 ov_model.reshape(new_shapes)
                 ov.save_model(ov_model, xml_path)
-                print(">>> [Bake] Remediation Applied. Verifying...")
+                print(">>> [Bake] Static Remediation Applied. Verifying...")
 
                 # VERIFICATION STEP
-                # Reload to prove it worked
                 verify_model = core.read_model(xml_path)
                 success = True
                 for input_node in verify_model.inputs:
                     ps = input_node.get_partial_shape()
                     print(f"    > [Verify] {input_node.any_name}: {ps}")
-                    for i, dim in enumerate(ps):
-                        if dim.is_dynamic and (dim.get_max_length() == -1 or dim.get_max_length() > 200000):
-                            print(f"[ERROR] Node {input_node.any_name} Dimension {i} is still unbounded! NPU will crash.")
-                            success = False
+                    if ps.is_dynamic:
+                        print(f"[ERROR] Node {input_node.any_name} is still dynamic! NPU requires STATIC shapes.")
+                        success = False
 
                 if not success:
-                    print(">>> [Bake] FATAL: Remediation failed to bound all shapes.")
+                    print(">>> [Bake] FATAL: Failed to make model fully static.")
                 else:
-                    print(">>> [Bake] Verification Passed: All shapes are bounded.")
+                    print(">>> [Bake] Verification Passed: Model is fully static.")
             else:
                 print("[Warning] No suitable inputs found to reshape.")
         else:
@@ -116,7 +133,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Ensure output dir is clean if it exists to prevent partial overwrites
     if os.path.exists(args.output_dir):
         print(f">>> [Bake] Warning: Output directory {args.output_dir} exists.")
 
