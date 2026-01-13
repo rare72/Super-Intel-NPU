@@ -51,17 +51,11 @@ $SUDO DEBIAN_FRONTEND=noninteractive apt install -y \
     libze1 \
     libze-dev \
     intel-opencl-icd \
-    intel-level-zero-gpu \
-    level-zero \
     intel-media-va-driver-non-free \
     libmfxgen1 \
     libvpl2 \
-    libegl1-mesa-dev \
     libgl1-mesa-dri \
     libglapi-mesa \
-    libgles2-mesa-dev \
-    libglx-mesa0 \
-    libigdgmm12 \
     libxatracker2 \
     mesa-va-drivers \
     mesa-vdpau-drivers \
