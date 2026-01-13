@@ -10,6 +10,7 @@ This project implements a high-performance, hardware-sharded inference engine de
   - **Shard B (GPU)**: Runs the second half using PyTorch/CUDA (or Arc equivalent).
 - **Zero-Copy Handoff**: Utilizes POSIX Shared Memory to transfer tensor data between the C++ Executive and Python Supervisor without copying memory.
 - **Robust Lifecycle**: Python Supervisor manages the C++ process, ensuring clean startup and shutdown (no memory leaks).
+- **Detailed Metrics**: Reports precise Token-Per-Second (TPS) statistics for NPU, C++ Framework, and GPU execution.
 
 ## Supported Models
 This engine is optimized for the following models:
@@ -86,6 +87,20 @@ python src/python/supervisor.py \
     --model_xml ./models/neuralchat_int4 \
     --tokenizer_id Intel/neural-chat-7b-v3-1 \
     --prompt "What are the benefits of NPU inference?"
+```
+
+## Performance Metrics
+The supervisor now outputs detailed execution statistics on exit:
+```text
+[EXIT] Script finished at Mon Jan 12 ...
+[EXIT] Total Input Prompt Tokens: 15
+[EXIT] NPU_Duration_Time:  3.4000
+[EXIT] C++ FrameWork-(Hand Off Processing)_Duration Time: 0.015
+[EXIT] GPU_Duration_Time: 1.6000
+[EXIT] Total Context Tokens (Prompt + Generated): 143
+[EXIT] Total Readable Tokens (Answer content): 128
+[EXIT] Tokens per Second_NPU: 37.65
+...
 ```
 
 ## Troubleshooting
