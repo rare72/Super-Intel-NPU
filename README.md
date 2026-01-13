@@ -16,21 +16,16 @@ This engine is optimized for the following models:
 1.  **Meta Llama 3 (8B)**: The standard open-weight model.
 2.  **Intel Neural Chat 7B (v3-1)**: A Mistral-based model fine-tuned on Gaudi2, utilizing SwiGLU activation for native NPU support.
 
-## Directory Structure
-- `src/cpp`: C++ Source code for the low-level Executive process (Level Zero, OpenVINO).
-- `src/python`: Python scripts for model baking, supervision, and inference.
-- `scripts`: Helper scripts for setup, hardware checking, and packaging.
-- `documentation`: Implementation details and logs.
-
 ## Prerequisites
 - **Hardware**: Intel Core Ultra Processor (Series 1 or 2) with NPU and Arc Graphics.
 - **OS**: Linux (Ubuntu 22.04 / 24.04 or compatible).
-- **Drivers**: Intel Level Zero GPU & NPU drivers (`intel-level-zero-gpu`, `intel-level-zero-npu`).
+- **Drivers**: Intel Level Zero GPU & NPU drivers (installed via setup script).
 
 ## Quick Start
 
 ### 1. Environment Setup
-Run the setup script to install system dependencies and create the Python virtual environment.
+Run the setup script. This script **adds the Intel Graphics Package Repository** and installs necessary system drivers (`libze`, `opencl`, etc.). You may be prompted for your `sudo` password.
+
 ```bash
 ./scripts/setup_env.sh
 source venv_offering/bin/activate
@@ -87,6 +82,7 @@ python src/python/supervisor.py \
 ```
 
 ## Troubleshooting
-- **CMake Error "Level Zero not found"**: Ensure `libze-dev` is installed.
+- **CMake Error "Level Zero not found"**: Ensure `libze-dev` is installed (handled by setup script).
 - **Shared Memory Errors**: Ensure `/dev/shm` is mounted and you have permissions (standard on most Linux distros).
 - **NPU not found**: Verify kernel version (6.8+ recommended) and `intel-level-zero-npu` package.
+- **Setup Script Errors**: If `setup_env.sh` fails to find packages, ensure you have internet access and that the Intel repository was added correctly to `/etc/apt/sources.list.d/`.
