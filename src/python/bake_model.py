@@ -88,25 +88,25 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         new_shapes = {}
 
         for input_node in ov_model_obj.inputs:
+            name = input_node.any_name
             partial_shape = input_node.get_partial_shape()
 
-            # Identify inputs that look like [Batch, SeqLen, ...]
-            if len(partial_shape) >= 2:
-                new_shape_list = []
-                new_shape_list.append(STATIC_BATCH_SIZE) # Index 0: Batch
-                new_shape_list.append(STATIC_SEQ_LEN)    # Index 1: Sequence Length
+            # 1. Handle beam_idx (Strictly 1D: [Batch])
+            if "beam_idx" in name:
+                new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE])
+                logger.info(f"    > Locking {name} to {[STATIC_BATCH_SIZE]}")
+                continue
 
-                # Keep remaining dimensions static if they exist
-                if len(partial_shape) > 2:
-                    for i in range(2, len(partial_shape)):
-                        dim = partial_shape[i]
-                        if dim.is_static:
-                            new_shape_list.append(dim.get_length())
-                        else:
-                            new_shape_list.append(dim) # Keep dynamic if unknown (unlikely for KV cache usually)
+            # 2. Handle Primary Inputs (input_ids, attention_mask, position_ids) -> [Batch, SeqLen]
+            if any(k in name for k in ["input_ids", "attention_mask", "position_ids"]):
+                if len(partial_shape) >= 2:
+                    new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE, STATIC_SEQ_LEN])
+                    logger.info(f"    > Locking {name} to {[STATIC_BATCH_SIZE, STATIC_SEQ_LEN]}")
+                continue
 
-                new_shapes[input_node.any_name] = ov.PartialShape(new_shape_list)
-                logger.info(f"    > Locking {input_node.any_name} to {new_shape_list}")
+            # 3. Handle Other Inputs (e.g. past_key_values) - Log only for now
+            if partial_shape.is_dynamic:
+                logger.warning(f"    > [Warning] Found dynamic input '{name}' with shape {partial_shape}. Not reshaping automatically.")
 
         if new_shapes:
             logger.info("Applying reshape directly to in-memory graph...")
