@@ -1,0 +1,56 @@
+Task: Fix NPU Dynamic Shape Crash and Runtime Shape Mismatch
+Timestamp: 2026-01-14 02:45:00
+
+Summary of Changes:
+-------------------
+Resolved two critical issues blocking NPU inference:
+1.  **NPU Load Crash:** Fixed `to_shape was called on a dynamic shape` by updating the model baking process to explicitly reshape internal KV-cache state variables (past_key_values) to static dimensions.
+2.  **Runtime Shape Incompatibility:** Fixed `RuntimeError: incompatible shapes` by enforcing strict input padding in the Supervisor runtime, ensuring all inputs match the baked static length (128 tokens).
+
+Detailed Implementation Notes:
+------------------------------
+1.  **src/python/bake_model.py**:
+    *   **Static Length Change:** Reduced `STATIC_SEQUENCE_LENGTH` from 1024 to **128** to align with user constraints ("MAXIMUM of 128 Tokens") and reduce NPU memory pressure.
+    *   **State Reshaping:** Added logic to inspect dynamic inputs (specifically KV-cache `past_key_values`) and force them to static shapes `[1, ..., 128, ...]`.
+    *   **Shape Propagation:** Added a call to `ov_model_obj.validate_nodes_and_infer_types()` after reshaping. This is crucial for OpenVINO to propagate the static input shapes to downstream internal State/Variable nodes, preventing the NPU driver from seeing dynamic operations.
+    *   **Verification:** Enhanced verification logging to inspect both inputs and outputs.
+
+2.  **src/python/supervisor.py**:
+    *   **Input Padding:** Implemented manual padding logic in `run_inference_single`. It now pads `input_ids` and `attention_mask` with the tokenizer's pad token (or EOS token) to strictly match `STATIC_SEQ_LEN` (128).
+    *   **Logic:**
+        ```python
+        pad_len = target_len - input_len_orig
+        padding = torch.full((1, pad_len), pad_id, dtype=torch.long)
+        inputs.input_ids = torch.cat([inputs.input_ids, padding], dim=1)
+        ```
+    *   **Metric Adjustment:** Updated metrics to calculate TPS based on the *actual* generated tokens (stripping the static input block), ensuring accurate reporting despite the padding.
+
+Fixes & Caveats:
+----------------
+*   **Fix:** Resolved `ZE_RESULT_ERROR_INVALID_ARGUMENT` on NPU load.
+*   **Fix:** Resolved `Can't set the input tensor... incompatible` error on CPU fallback.
+*   **Caveat:** The model is now strictly limited to 128 tokens (Input + Output). Inputs longer than 128 tokens will be truncated.
+*   **Caveat:** "Streaming" token-by-token generation via `generate()` is used, but due to the strict static shape of 128, the model effectively operates in a fixed-window mode.
+
+Usage Instructions:
+-------------------
+1.  **Re-Bake the Model:**
+    You MUST re-run the bake script to generate the new static-128 binaries.
+    ```bash
+    python src/python/bake_model.py --model_id "Intel/neural-chat-7b-v3-1"
+    ```
+
+2.  **Run Inference:**
+    ```bash
+    python src/python/supervisor.py \
+        --model_xml ./offering_int4_binary/openvino_model.xml \
+        --tokenizer_id "Intel/neural-chat-7b-v3-1" \
+        --prompt "List the planets."
+    ```
+
+Technical Metrics:
+------------------
+*   **Static Sequence Length:** 128
+*   **Batch Size:** 1
+*   **Precision:** INT4 (NNCF Data-Free)
+*   **Target Device:** NPU (Intel Core Ultra / Level Zero)

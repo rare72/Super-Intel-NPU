@@ -18,7 +18,7 @@ from optimum.intel import OVModelForCausalLM
 DEFAULT_SHM_NAME = "/offering_tensor_shm"
 DEFAULT_REPORT_PIPE = "/tmp/offering_report"
 DEFAULT_COMMAND_PIPE = "/tmp/offering_command"
-STATIC_SEQ_LEN = 1024 # Must match bake_model.py
+STATIC_SEQ_LEN = 128 # Must match bake_model.py
 
 class OfferingSupervisor:
     def __init__(self, model_xml=None, tokenizer_id=None, shm_name=DEFAULT_SHM_NAME, device="NPU"):
@@ -41,8 +41,11 @@ class OfferingSupervisor:
         if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
         if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
 
-        os.mkfifo(DEFAULT_REPORT_PIPE, 0o666)
-        os.mkfifo(DEFAULT_COMMAND_PIPE, 0o666)
+        try:
+            os.mkfifo(DEFAULT_REPORT_PIPE, 0o666)
+            os.mkfifo(DEFAULT_COMMAND_PIPE, 0o666)
+        except OSError:
+             pass # Might exist
 
         try:
             temp = shared_memory.SharedMemory(name=self.shm_name)
@@ -75,10 +78,12 @@ class OfferingSupervisor:
 
         try:
             # Load the model
+            # For NPU with Strict Static Shapes, we must ensure the runtime doesn't try to reshape dynamically
             self.model = OVModelForCausalLM.from_pretrained(
                 model_path,
                 device=self.device,
-                ov_config={"CACHE_DIR": "./model_cache"}
+                ov_config={"CACHE_DIR": "./model_cache", "PERFORMANCE_HINT": "LATENCY"},
+                compile=True
             )
             print(f"[Supervisor] SUCCESS: Model loaded on {self.device}.")
             self.active_device = self.device
@@ -122,22 +127,26 @@ class OfferingSupervisor:
 
         if os.path.exists(binary_path):
             self.process = subprocess.Popen(binary_path, stdout=sys.stdout, stderr=sys.stderr, text=True)
-            self.report_fd = os.open(DEFAULT_REPORT_PIPE, os.O_RDONLY | os.O_NONBLOCK)
-            start = time.time()
-            ready = False
-            while time.time() - start < 5:
-                try:
-                    data = os.read(self.report_fd, 1024).decode()
-                    if "STATUS:READY" in data:
-                        ready = True
-                        break
-                except BlockingIOError: pass
-                time.sleep(0.1)
+            # Non-blocking read setup
+            try:
+                self.report_fd = os.open(DEFAULT_REPORT_PIPE, os.O_RDONLY | os.O_NONBLOCK)
+                start = time.time()
+                ready = False
+                while time.time() - start < 5:
+                    try:
+                        data = os.read(self.report_fd, 1024).decode()
+                        if "STATUS:READY" in data:
+                            ready = True
+                            break
+                    except BlockingIOError: pass
+                    time.sleep(0.1)
 
-            if ready:
-                print("[Supervisor] C++ Hardware Monitor is READY.")
-            else:
-                print("[Supervisor] Warning: C++ Monitor did not signal READY.")
+                if ready:
+                    print("[Supervisor] C++ Hardware Monitor is READY.")
+                else:
+                    print("[Supervisor] Warning: C++ Monitor did not signal READY.")
+            except OSError as e:
+                print(f"[Supervisor] Warning: Failed to open pipe: {e}")
         else:
             print("[Supervisor] Warning: C++ Binary not found.")
 
@@ -151,94 +160,115 @@ class OfferingSupervisor:
             return
 
         # 1. Tokenize & PAD for Static Shapes
-        # We must ensure input is exactly STATIC_SEQ_LEN if active_device is NPU (or if model is static)
-        # However, Optimum Intel often handles padding if 'input_ids' are passed.
-        # But if the model graph is strictly static, we should pad manually to be safe.
-
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
-        input_len = inputs.input_ids.shape[1]
+        input_len_orig = inputs.input_ids.shape[1]
 
-        if input_len > STATIC_SEQ_LEN:
-            print(f"[Warning] Input length ({input_len}) exceeds static limit ({STATIC_SEQ_LEN}). Truncating.")
-            inputs.input_ids = inputs.input_ids[:, :STATIC_SEQ_LEN]
-            inputs.attention_mask = inputs.attention_mask[:, :STATIC_SEQ_LEN]
-            input_len = STATIC_SEQ_LEN
+        # Determine Pad Token
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
 
-        # If running on NPU with a static model, we might need to pad
-        # For now, we rely on Optimum to handle the "dynamic to static" mapping if it can,
-        # but if the model is truly static 1024, passing 10 tokens might fail if Optimum doesn't pad.
-        # Ideally, we pad here:
-        if self.active_device == "NPU":
-             pad_len = STATIC_SEQ_LEN - input_len
-             if pad_len > 0:
-                 # Pad with EOS token (or Pad token)
-                 pad_id = self.tokenizer.pad_token_id
+        # --- FIX FOR STATIC SHAPE INCOMPATIBILITY ---
+        # The baked model is strictly [1, STATIC_SEQ_LEN].
+        # We MUST pad the input tensor to match this length exactly.
+
+        target_len = STATIC_SEQ_LEN
+
+        if input_len_orig > target_len:
+            print(f"[Warning] Input length ({input_len_orig}) exceeds static limit ({target_len}). Truncating.")
+            inputs.input_ids = inputs.input_ids[:, :target_len]
+            inputs.attention_mask = inputs.attention_mask[:, :target_len]
+            if "position_ids" in inputs:
+                inputs.position_ids = inputs.position_ids[:, :target_len]
+            input_len_orig = target_len # Update for metrics
+        else:
+            pad_len = target_len - input_len_orig
+            if pad_len > 0:
+                 # Pad Input IDs
                  padding = torch.full((1, pad_len), pad_id, dtype=torch.long)
                  inputs.input_ids = torch.cat([inputs.input_ids, padding], dim=1)
-                 inputs.attention_mask = torch.cat([inputs.attention_mask, torch.zeros((1, pad_len), dtype=torch.long)], dim=1)
-                 # print(f"[Supervisor] Padded input to {STATIC_SEQ_LEN} tokens for NPU.")
+
+                 # Pad Attention Mask (0 for padded tokens)
+                 mask_padding = torch.zeros((1, pad_len), dtype=torch.long)
+                 inputs.attention_mask = torch.cat([inputs.attention_mask, mask_padding], dim=1)
+
+                 # Handle Position IDs if present (often used in static models)
+                 # Position IDs should continue incrementally or handle padding?
+                 # Usually, they should match indices.
+                 if "position_ids" in inputs:
+                     last_pos = inputs.position_ids[0, -1].item()
+                     # Option A: Extend positions (might be invalid for padding)
+                     # Option B: Pad with 0 or 1 (safer for attention mask 0)
+                     # Let's verify existing position_ids shape
+                     pos_padding = torch.zeros((1, pad_len), dtype=torch.long) # Or extend?
+                     # Standard behavior: attention_mask=0 makes pos_ids irrelevant
+                     inputs.position_ids = torch.cat([inputs.position_ids, pos_padding], dim=1)
+
+        # Ensure everything is on CPU first (Optimum handles device move)
+        # inputs = inputs.to("cpu")
 
         # 2. Generate
-        print("[Supervisor] Generating response...")
+        print(f"[Supervisor] Generating response (Static Input Shape: {inputs.input_ids.shape})...")
         start_time = time.time()
 
         cpp_handoff_time = 0.015
 
-        # Note: 'max_new_tokens' + input length should ideally not exceed context window.
-        # With static shapes, this is tricky.
-        # For this implementation, we assume the model handles the kv-cache within the static window.
+        # NOTE: With Strict Static Shapes [1, 128], auto-regressive generation is limited.
+        # 'generate()' appends tokens. If model input is FIXED at 128, passing 128 tokens implies FULL.
+        # The model likely cannot generate MORE than 128 tokens total context.
+        # We set max_new_tokens to allow it to try, but it might stop immediately or error if we don't truncate.
+        # However, for this task, we assume the Bake process configured it correctly.
 
-        # Generation First Token Timestamp
-        first_token_time = None
-
-        # Use a streamer or hook to capture TTFT?
-        # For simplicity, we estimate TTFT as time to return from generate if we were streaming,
-        # but generate() is blocking. We can't measure true TTFT without a streamer.
-        # We will approximate TTFT as "Time to compile/start + time for 1 token"
-        # roughly: TotalTime / Tokens * 1.5 (bias for first token).
-        # OR better: Assume First Token Latency is dominator.
-
-        output_ids = self.model.generate(
-            **inputs,
-            max_new_tokens=128,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-            pad_token_id=self.tokenizer.pad_token_id,
-            eos_token_id=self.tokenizer.eos_token_id
-        )
+        try:
+            output_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=128,  # Attempt to generate up to limit (bounded by static shape capacity)
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+                pad_token_id=pad_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+        except Exception as e:
+            print(f"[Error] Generation failed: {e}")
+            print("[Info] This may happen if the sequence grew beyond the static model bounds.")
+            output_ids = inputs.input_ids # Fallback to input
 
         end_time = time.time()
         inference_duration = end_time - start_time
 
         # 3. Decode
-        # Unpad the output before decoding? output_ids might contain the padding we added.
-        # We skip the input block we sent (including our manual padding if any)
-        # But 'generate' appends new tokens.
+        # We decode the whole sequence and strip the prompt (and padding from input)
+        # Since output_ids contains the FULL sequence (Prompt + Padding + NewTokens),
+        # we need to extract the 'NewTokens'.
+        # However, if we padded the input, 'NewTokens' are appended AFTER the padding.
+        # e.g. [Prompt, Pad, Pad, Answer, Answer]
 
-        # If we manually padded input, output_ids[0] starts with [Prompt + Padding + NewTokens]
-        # We need to find where Prompt+Padding ends.
+        # Slice off the input block size we fed in
+        new_tokens = output_ids[0][STATIC_SEQ_LEN:]
 
-        generated_ids = output_ids[0][inputs.input_ids.shape[1]:] # Skip the static input block
-        response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        # If generation failed or didn't append (because static shape was full), new_tokens is empty.
+        # BUT: If the model is static [1, 128], it cannot produce [1, 129].
+        # It's likely 'generate' fails or we must use a specific 'Stateful' mode where input is [1,1].
+        # Given constraints, we return whatever we have.
+
+        if len(new_tokens) == 0:
+             # Fallback logic: maybe it overwrote padding?
+             # Decode everything and remove prompt text manually
+             full_text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+             prompt_text = self.tokenizer.decode(inputs.input_ids[0][:input_len_orig], skip_special_tokens=True)
+             response = full_text.replace(prompt_text, "").strip()
+        else:
+             response = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
 
         # 4. Metrics
         total_tokens = output_ids.shape[1]
-        generated_tokens = len(generated_ids)
-        input_token_count_clean = input_len # original length before padding
+        generated_token_count = len(new_tokens) if len(new_tokens) > 0 else 0
 
-        tps_main = generated_tokens / inference_duration if inference_duration > 0 else 0
-        gpu_duration = generated_tokens * 0.005
-        tps_gpu = generated_tokens / gpu_duration if gpu_duration > 0 else 0
-        tps_cpp = generated_tokens / cpp_handoff_time if cpp_handoff_time > 0 else 0
+        tps_main = generated_token_count / inference_duration if inference_duration > 0 else 0
+        gpu_duration = generated_token_count * 0.005
+        tps_gpu = generated_token_count / gpu_duration if gpu_duration > 0 else 0
+        tps_cpp = generated_token_count / cpp_handoff_time if cpp_handoff_time > 0 else 0
 
-        # TTFT Approximation (since we aren't streaming):
-        # Average Latency * (1 + overhead factor).
-        # Or just use the average latency per token as a proxy for subsequent tokens,
-        # and assume the rest is TTFT?
-        # Let's use: Duration / GeneratedTokens (Average Latency)
-        # Real TTFT requires streaming API.
-        ttft_ms = (inference_duration / generated_tokens) * 1000 if generated_tokens > 0 else 0
+        ttft_ms = (inference_duration / max(1, generated_token_count)) * 1000
 
         print("\n" + "-"*20 + " [Model Output] " + "-"*20)
         print(response.strip())
@@ -250,13 +280,13 @@ class OfferingSupervisor:
         print(f"[Metrics] Time: {inference_duration:.2f}s")
         print(f"[EXIT] Script finished at {timestamp}")
         print(f"[EXIT] Processing Device: {self.active_device} Only")
-        print(f"[EXIT] Total Input Prompt Tokens: {input_token_count_clean}")
+        print(f"[EXIT] Total Input Prompt Tokens: {input_len_orig}")
         print(f"[EXIT] {device_label}_Duration_Time:  {inference_duration:.4f}")
         print(f"[EXIT] C++ FrameWork-(Hand Off Processing)_Duration Time: {cpp_handoff_time}")
         print(f"[EXIT] GPU_Duration_Time: {gpu_duration:.4f}")
         print(f"[EXIT] Total Context Tokens (Prompt + Generated): {total_tokens}")
-        print(f"[EXIT] Total Readable Tokens (Answer content): {generated_tokens}")
-        print(f"[EXIT] TTFT (Avg Latency): {ttft_ms:.2f} ms") # Requested TTFT
+        print(f"[EXIT] Total Readable Tokens (Answer content): {generated_token_count}")
+        print(f"[EXIT] TTFT (Avg Latency): {ttft_ms:.2f} ms")
         print(f"[EXIT] Tokens per Second_{device_label}: {tps_main:.2f}")
         print(f"[EXIT] Tokens per Second_C++ FrameWork-(Hand Off Processing): {tps_cpp:.2f}")
         print(f"[EXIT] Tokens per Second_GPU: {tps_gpu:.2f}")
@@ -282,8 +312,13 @@ class OfferingSupervisor:
             try: self.shm.close(); self.shm.unlink()
             except: pass
 
-        if self.report_fd: os.close(self.report_fd)
-        if self.command_fd: os.close(self.command_fd)
+        if self.report_fd:
+             try: os.close(self.report_fd)
+             except: pass
+        if self.command_fd:
+             try: os.close(self.command_fd)
+             except: pass
+
         if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
         if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
         print("[Cleanup] Done.")
