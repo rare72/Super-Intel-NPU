@@ -1,0 +1,61 @@
+Bake Method Comparison & Architecture Update
+==============================================
+Timestamp: 2026-01-14_13-00-00
+Task: Resolve Bake Method Conflicts & Enable Dynamic NPU Inference
+
+Summary of Changes
+------------------
+The system now supports two distinct "Bake" (Model Preparation) methods, adapting the runtime execution strategy automatically.
+
+1. The "Original" Method (Static Stateless)
+   - Tool: `src/python/bake_model.py` (Custom Script)
+   - Technique: Uses `optimum-intel` to export, then forcibly reshapes the graph to strict static dimensions [1, 128].
+   - Config: `use_cache=False` (Stateless).
+   - NPU Execution: Uses a custom "Fixed-Window" loop in `supervisor.py`. It manually pads every input to [1, 128] to satisfy strict NPU driver requirements on older kernels.
+   - Pros: Maximum stability on older hardware. Zero dynamic shape errors.
+   - Cons: Cannot handle long context efficiently (recomputes full attention every step).
+
+2. The "CLI" Method (Dynamic Stateful) - **[USER PREFERRED]**
+   - Tool: `optimum-cli` (Command Line)
+   - Command: `optimum-cli export openvino --model ... --task text-generation-with-past ...`
+   - Technique: Exports standard Hugging Face architecture with KV-Cache support.
+   - Config: `use_cache=True` (Stateful).
+   - NPU Execution: Now uses `supervisor.py`'s new Dynamic path, leveraging `optimum-intel`'s built-in `generate()` function.
+   - Pros: Higher performance (Tokens/Sec) due to KV-caching. Supports longer context naturally.
+   - Cons: Requires newer Intel NPU drivers that support dynamic input shapes.
+
+Implementation Notes
+--------------------
+File: `src/python/supervisor.py`
+- **Auto-Detection:** The supervisor now attempts to load the model in "Stateless" mode first. If `optimum` raises a `ValueError` regarding cache configuration, it automatically switches to "Stateful" mode and reloads.
+- **Dual Inference Loops:**
+  - `run_custom_static_inference()`: The manual padding loop for Method 1.
+  - `run_dynamic_stateful_inference()`: A wrapper around `model.generate()` for Method 2.
+
+Fixes & Caveats
+---------------
+- **Fix:** Resolved the "use_cache was set to False" crash. The system now respects the export configuration of the model.
+- **Caveat:** The "CLI Method" relies on the NPU driver handling dynamic shapes (e.g., input [1, 5] growing to [1, 6]). If the NPU driver hangs or crashes, fallback to the "Original Method" is required.
+
+Usage Instructions
+------------------
+1. **To run the User's CLI Model (Preferred):**
+   ```bash
+   python src/python/supervisor.py \
+     --model_xml ./models/neuralchat_int4 \
+     --tokenizer_id Intel/neural-chat-7b-v3-1 \
+     --prompt "List the planets."
+   ```
+
+2. **To run the Original Static Model (Legacy/Fallback):**
+   First, bake the model using the script:
+   ```bash
+   python src/python/bake_model.py
+   ```
+   Then run supervisor (it will auto-detect stateless mode).
+
+Technical Metrics
+-----------------
+- **Testing:** Verified logic flow handling `ValueError` during load.
+- **Target:** Intel Core Ultra NPU (Level Zero).
+- **Quantization:** INT4 (Symmetric/Asymmetric depending on bake method).

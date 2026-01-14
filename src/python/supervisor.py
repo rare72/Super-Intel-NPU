@@ -35,6 +35,7 @@ class OfferingSupervisor:
 
         self.tokenizer = None
         self.model = None
+        self.use_cache_state = False # Track if we are in stateful or stateless mode
 
     def setup_resources(self):
         print(f"[Supervisor] Initializing Resources (SHM: {self.shm_name})...")
@@ -76,29 +77,55 @@ class OfferingSupervisor:
             print("[Error] Model path not found. Cannot run real inference.")
             return
 
-        try:
-            # Load the model
-            # For NPU with Strict Static Shapes, we must ensure the runtime doesn't try to reshape dynamically
-            self.model = OVModelForCausalLM.from_pretrained(
-                model_path,
-                device=self.device,
-                ov_config={"CACHE_DIR": "./model_cache", "PERFORMANCE_HINT": "LATENCY"},
-                compile=True,
-                use_cache=False # IMPORTANT: Match bake settings
-            )
+        # Strategy: Try Stateless (Static) first, as it's preferred for NPU stability.
+        # If model was exported with --task text-generation-with-past, this will fail.
+        # We catch that failure and switch to Stateful (Dynamic).
 
-            # Inspect inputs to determine if beam_idx is required
-            self.model_input_names = [input.any_name for input in self.model.request.model_inputs]
-            print(f"[Supervisor] Model Inputs: {self.model_input_names}")
+        configs_to_try = [False, True]
+        success = False
 
-            print(f"[Supervisor] SUCCESS: Model loaded on {self.device}.")
+        for try_cache in configs_to_try:
+            try:
+                print(f"[Supervisor] Attempting load with use_cache={try_cache}...")
+                self.model = OVModelForCausalLM.from_pretrained(
+                    model_path,
+                    device=self.device,
+                    ov_config={"CACHE_DIR": "./model_cache", "PERFORMANCE_HINT": "LATENCY"},
+                    compile=True,
+                    use_cache=try_cache
+                )
+                self.use_cache_state = try_cache
+                success = True
+                break # Loaded successfully
+            except ValueError as e:
+                # Catch specific Optimum error about cache mismatch
+                if "use_cache" in str(e):
+                    print(f"[Supervisor] Config mismatch detected: {e}")
+                    print("[Supervisor] Switching cache mode and retrying...")
+                    continue
+                else:
+                    print(f"[Error] Unexpected ValueError during load: {e}")
+                    break
+            except Exception as e:
+                print(f"[Error] Failed to load model on {self.device}: {e}")
+                break
+
+        if success:
+            # Inspect inputs to determine if beam_idx is required (only relevant for manual loop)
+            try:
+                self.model_input_names = [input.any_name for input in self.model.request.model_inputs]
+                print(f"[Supervisor] Model Inputs: {self.model_input_names}")
+            except:
+                self.model_input_names = []
+
+            print(f"[Supervisor] SUCCESS: Model loaded on {self.device}. Mode: {'Stateful' if self.use_cache_state else 'Stateless'}")
             self.active_device = self.device
-        except Exception as e:
-            print(f"[Error] Failed to load model on {self.device}: {e}")
+        else:
             print("[Supervisor] Falling back to CPU...")
             try:
-                 self.model = OVModelForCausalLM.from_pretrained(model_path, device="CPU", use_cache=False)
+                 self.model = OVModelForCausalLM.from_pretrained(model_path, device="CPU", use_cache=True)
                  self.active_device = "CPU"
+                 self.use_cache_state = True
             except:
                  print("[Fatal] Could not load model on NPU or CPU.")
                  sys.exit(1)
@@ -156,6 +183,55 @@ class OfferingSupervisor:
         else:
             print("[Supervisor] Warning: C++ Binary not found.")
 
+    def run_inference(self, formatted_prompt):
+        """
+        Dispatches inference to the correct loop based on model configuration.
+        """
+        if self.use_cache_state:
+            # Stateful Model (CLI Method) -> Use Standard Optimum Generate
+            self.run_dynamic_stateful_inference(formatted_prompt)
+        else:
+            # Stateless Model (Bake Script) -> Use Custom Static Loop
+            self.run_custom_static_inference(formatted_prompt)
+
+    def run_dynamic_stateful_inference(self, formatted_prompt):
+        """
+        Uses optimum-intel's built-in generate() which handles KV cache management.
+        Best for models exported via optimum-cli with --task text-generation-with-past.
+        """
+        print("\n" + "="*40)
+        print(f"[Supervisor] Processing Prompt on {self.active_device} (Dynamic Stateful)...")
+        print("="*40 + "\n")
+
+        if not self.model or not self.tokenizer:
+            return
+
+        inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
+        input_ids = inputs.input_ids.to(self.active_device if self.active_device == "CPU" else "cpu")
+
+        start_time = time.time()
+
+        # Standard Optimum Generation
+        # This handles past_key_values automatically
+        output_ids = self.model.generate(
+            input_ids,
+            max_new_tokens=128,
+            do_sample=True,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.9
+        )
+
+        end_time = time.time()
+        inference_duration = end_time - start_time
+
+        response = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        # Remove input prompt from response if present
+        if response.startswith(formatted_prompt):
+            response = response[len(formatted_prompt):]
+
+        self.print_metrics(response, inference_duration, len(output_ids[0]) - len(input_ids[0]), len(input_ids[0]))
+
     def run_custom_static_inference(self, formatted_prompt):
         """
         Manually executes inference loop ensuring strictly static inputs [1, 128]
@@ -183,7 +259,6 @@ class OfferingSupervisor:
             input_len = STATIC_SEQ_LEN
 
         # 2. Loop Configuration
-        # Ensure pad_id is valid
         if self.tokenizer.pad_token_id is not None:
              pad_id = self.tokenizer.pad_token_id
         elif self.tokenizer.eos_token_id is not None:
@@ -221,25 +296,17 @@ class OfferingSupervisor:
             static_position_ids = torch.arange(0, STATIC_SEQ_LEN, dtype=torch.long).unsqueeze(0)
 
             # B. INFER (Direct OpenVINO Request)
-            # We use the underlying request to avoid Optimum's dynamic reshaping
             request = self.model.request
 
-            # Build input dict matching typical OpenVINO expected names
             inputs_dict = {
                 "input_ids": static_input_ids.numpy().astype(np.int64),
                 "attention_mask": static_attention_mask.numpy().astype(np.int64),
                 "position_ids": static_position_ids.numpy().astype(np.int64)
             }
 
-            # Conditionally add beam_idx if the model expects it
+            # Conditionally add beam_idx
             if any("beam_idx" in name for name in self.model_input_names):
                 inputs_dict["beam_idx"] = np.array([0], dtype=np.int32)
-
-            # DEBUG: Print shapes once
-            if i == 0:
-                print(f"[DEBUG] Infer Input Shapes: input_ids={inputs_dict['input_ids'].shape}, "
-                      f"att={inputs_dict['attention_mask'].shape}, "
-                      f"pos={inputs_dict['position_ids'].shape}")
 
             # C. Run Inference
             try:
@@ -249,11 +316,9 @@ class OfferingSupervisor:
                 break
 
             # D. Get Logits
-            # Output tensor 0 is usually logits: [1, 128, VocabSize]
             logits = torch.from_numpy(request.get_output_tensor(0).data)
 
-            # Extract logit for the LAST REAL TOKEN (at index current_len - 1)
-            # We ignore logits computed for padding positions
+            # Extract logit for the LAST REAL TOKEN
             next_token_logits = logits[:, current_len - 1, :]
 
             # E. Greedy Sample (Argmax)
@@ -268,18 +333,16 @@ class OfferingSupervisor:
             current_ids = torch.cat([current_ids, next_token_id], dim=1)
             current_mask = torch.cat([current_mask, torch.ones((1, 1), dtype=torch.long)], dim=1)
 
-            # H. Update UI/Stream (Optional)
-            # print(self.tokenizer.decode([next_token_id.item()]), end="", flush=True)
-
         end_time = time.time()
         inference_duration = end_time - start_time
 
         # 4. Final Decode
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        self.print_metrics(response, inference_duration, len(generated_tokens), input_len)
 
-        # Metrics
-        tps = len(generated_tokens) / inference_duration if inference_duration > 0 else 0
-        ttft = (inference_duration / len(generated_tokens) * 1000) if len(generated_tokens) > 0 else 0
+    def print_metrics(self, response, duration, generated_count, prompt_count):
+        tps = generated_count / duration if duration > 0 else 0
+        ttft = (duration / generated_count * 1000) if generated_count > 0 else 0
 
         print("\n" + "-"*20 + " [Model Output] " + "-"*20)
         print(response.strip())
@@ -287,14 +350,13 @@ class OfferingSupervisor:
 
         timestamp = datetime.datetime.now().strftime("%a %b %d %H:%M:%S %Y")
 
-        print(f"[Metrics] Time: {inference_duration:.2f}s")
+        print(f"[Metrics] Time: {duration:.2f}s")
         print(f"[EXIT] Script finished at {timestamp}")
-        print(f"[EXIT] Processing Device: {self.active_device} Only")
-        print(f"[EXIT] Total Input Prompt Tokens: {input_len}")
-        print(f"[EXIT] Total Readable Tokens (Answer content): {len(generated_tokens)}")
+        print(f"[EXIT] Processing Device: {self.active_device} ({'Stateful' if self.use_cache_state else 'Stateless'})")
+        print(f"[EXIT] Total Input Prompt Tokens: {prompt_count}")
+        print(f"[EXIT] Total Generated Tokens: {generated_count}")
         print(f"[EXIT] TTFT (Avg Latency): {ttft:.2f} ms")
         print(f"[EXIT] Tokens per Second: {tps:.2f}")
-
 
     def inference_loop(self):
         print("[Supervisor] Starting Interactive Mode. Type 'EXIT' to quit.")
@@ -303,8 +365,7 @@ class OfferingSupervisor:
                 user_input = input("Prompt> ").strip()
                 if user_input == "EXIT": break
                 formatted = self.format_prompt(user_input, style="neural")
-                # Use the new static loop
-                self.run_custom_static_inference(formatted)
+                self.run_inference(formatted)
         except KeyboardInterrupt: pass
 
     def cleanup(self):
@@ -357,7 +418,6 @@ if __name__ == "__main__":
 
     if args.prompt:
         formatted = supervisor.format_prompt(args.prompt, args.system_message, args.chat_style)
-        # Use custom static loop
-        supervisor.run_custom_static_inference(formatted)
+        supervisor.run_inference(formatted)
     else:
         supervisor.inference_loop()
