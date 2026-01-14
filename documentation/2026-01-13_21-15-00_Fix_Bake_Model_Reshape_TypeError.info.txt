@@ -1,0 +1,33 @@
+Task: Fix Bake Model Reshape TypeError
+Date: 2026-01-13_21-15-00
+Status: Completed
+
+Summary of Changes:
+Resolved a critical `TypeError` during the model baking process where `OVModelForCausalLM.reshape()` was failing because it expected specific positional arguments (`sequence_length`) instead of a dictionary of `PartialShape` objects. The fix involved bypassing the wrapper method and calling `reshape()` directly on the underlying `openvino.runtime.Model` object.
+
+Detailed Implementation Notes:
+1.  **File Updated**: `src/python/bake_model.py`
+2.  **The Issue**:
+    -   The script previously called `model.reshape(new_shapes)` where `model` was an instance of `optimum.intel.OVModelForCausalLM`.
+    -   The `optimum-intel` wrapper's `reshape` method has a signature like `def reshape(self, batch_size, sequence_length, ...)` and does not accept a raw dictionary of input shapes.
+    -   The error raised was: `TypeError: OVBaseDecoderModel.reshape() missing 1 required positional argument: 'sequence_length'`.
+3.  **The Fix**:
+    -   Changed the call to `ov_model_obj.reshape(new_shapes)`.
+    -   `ov_model_obj` is a reference to `model.model` (the underlying OpenVINO Runtime Model), which supports the dictionary-based `reshape` API required for fine-grained control over input dimensions.
+
+Fixes & Caveats:
+-   **Fix**: The baking process now successfully applies the static shape constraints `[1, 1024]` to the graph in-memory before saving.
+-   **Caveat**: This relies on the `optimum` wrapper not caching shape information internally in a way that conflicts with the underlying model change. Given that `save_pretrained` serializes the underlying model, this approach is valid for the baking phase.
+
+Usage Instructions:
+No changes to command-line arguments. Run the bake script as before:
+```bash
+python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4
+```
+
+Technical Metrics:
+-   **Build Status**: Success (Code compiles and runs past the previous crash point).
+-   **Shape Enforcement**: Static Batch=1, Sequence Length=1024.
+
+Key Changes Made:
+-   **API Call Swap**: Switched from high-level `OVModel.reshape()` to low-level `openvino.runtime.Model.reshape()` to allow dictionary input.
