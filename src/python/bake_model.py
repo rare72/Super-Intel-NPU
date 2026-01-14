@@ -75,15 +75,13 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             export=True,
             compile=False,
             load_in_8bit=False,
-            quantization_config=quantization_config
+            quantization_config=quantization_config,
+            use_cache=False # Explicitly disable cache for stateless loop
         )
 
-        # 3b. IN-MEMORY RESHAPE (Fix for Bus Error & Dynamic Shapes)
-        # Instead of saving then re-reading (which causes mmap conflicts),
-        # we reshape the graph object directly in memory before the first save.
+        # 3b. IN-MEMORY RESHAPE
         logger.info(f">>> [Bake] Remediation: Enforcing STRICT STATIC shapes [{STATIC_BATCH_SIZE}, {STATIC_SEQ_LEN}] in-memory...")
 
-        # Access the underlying OpenVINO model object
         ov_model_obj = model.model
         new_shapes = {}
 
@@ -91,69 +89,47 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         for input_node in ov_model_obj.inputs:
             name = input_node.any_name
             partial_shape = input_node.get_partial_shape()
+            logger.info(f"    > Found Input: {name}, Shape: {partial_shape}")
 
-            # 1. Handle beam_idx (Strictly 1D: [Batch])
+            # 1. Handle beam_idx
             if "beam_idx" in name:
                 new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE])
-                logger.info(f"    > Locking {name} to {[STATIC_BATCH_SIZE]}")
+                logger.info(f"      -> Locking {name} to {[STATIC_BATCH_SIZE]}")
                 continue
 
-            # 2. Handle Primary Inputs (input_ids, attention_mask, position_ids) -> [Batch, SeqLen]
-            if any(k in name for k in ["input_ids", "attention_mask", "position_ids"]):
-                if len(partial_shape) >= 2:
-                    new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE, STATIC_SEQ_LEN])
-                    logger.info(f"    > Locking {name} to {[STATIC_BATCH_SIZE, STATIC_SEQ_LEN]}")
+            # 2. Handle 2D Inputs (input_ids, attention_mask)
+            if len(partial_shape) == 2:
+                new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE, STATIC_SEQ_LEN])
+                logger.info(f"      -> Locking 2D Input {name} to {[STATIC_BATCH_SIZE, STATIC_SEQ_LEN]}")
                 continue
 
-            # 3. Handle Past Key Values (KV Cache Inputs)
-            # If the inputs represent KV cache (typically 4D), reshape them to match the static sequence length
-            if "past_key_values" in name or "present" in name: # 'present' might be output, but checking inputs
-                 if len(partial_shape) == 4:
-                    # Typical shape: [Batch, Heads, SeqLen, Dim] or [Batch, Dim, SeqLen, Dim]
-                    # We need to preserve dimensions but fix Batch and SeqLen
-                    # Assuming NCHW or similar, usually 3rd dim is SeqLen or 2nd.
-                    # Llama: [Batch, NumKVHeads, SeqLen, HeadDim]
-                    new_shape_list = []
-                    for idx, dim in enumerate(partial_shape):
-                        if dim.is_dynamic:
-                            # Heuristic: if index is 0 -> Batch, if index is 2 -> SeqLen
-                            if idx == 0:
-                                new_shape_list.append(STATIC_BATCH_SIZE)
-                            elif idx == 2:
-                                new_shape_list.append(STATIC_SEQ_LEN)
-                            else:
-                                # Keep dynamic if we can't guess, or force arbitrary if needed?
-                                # Usually heads and hidden_dim are static.
-                                # If dynamic, we MUST guess or the NPU will fail.
-                                # But usually only Batch and SeqLen are dynamic in LLMs.
-                                # Let's warn.
-                                logger.warning(f"    > [Warning] Unresolved dynamic dim index {idx} in {name}: {dim}")
-                                new_shape_list.append(-1) # Keep as partial dynamic? No NPU hates it.
-                        else:
-                            new_shape_list.append(dim.get_length())
+            # 3. Handle 4D Inputs (KV Cache)
+            # If use_cache=False worked, these shouldn't exist, but if they do, lock them.
+            if len(partial_shape) == 4:
+                # [Batch, Heads, SeqLen, Dim]
+                new_shape_list = []
+                for idx, dim in enumerate(partial_shape):
+                    if dim.is_dynamic:
+                         # Assume dynamic dim is either Batch (idx 0) or SeqLen (usually idx 2 or 3)
+                         if idx == 0: new_shape_list.append(STATIC_BATCH_SIZE)
+                         # Heuristic: SeqLen is usually the *other* dynamic dim
+                         else: new_shape_list.append(STATIC_SEQ_LEN)
+                    else:
+                        new_shape_list.append(dim.get_length())
 
-                    if -1 not in new_shape_list: # Only apply if we resolved everything
-                         new_shapes[name] = ov.PartialShape(new_shape_list)
-                         logger.info(f"    > Locking KV Cache Input {name} to {new_shape_list}")
-
-            # 4. Catch-all for other dynamic inputs
-            if name not in new_shapes and partial_shape.is_dynamic:
-                logger.warning(f"    > [Warning] Found dynamic input '{name}' with shape {partial_shape}. Not reshaping automatically.")
+                new_shapes[name] = ov.PartialShape(new_shape_list)
+                logger.info(f"      -> Locking 4D Input {name} to {new_shape_list}")
+                continue
 
         if new_shapes:
             logger.info("Applying reshape directly to in-memory graph...")
-            # This updates the model object held by 'model' (OVModelForCausalLM)
-            # FIX: Call reshape on the underlying openvino.runtime.Model object (ov_model_obj)
-            # because OVModelForCausalLM.reshape() expects specific args (batch, seq_len)
-            # and does not accept a dictionary of PartialShapes.
             ov_model_obj.reshape(new_shapes)
 
-            # 3d. Validate and Infer Types to Propagate Shapes to States/Variables
             logger.info(">>> [Bake] Propagating shapes to internal States/Variables...")
             ov_model_obj.validate_nodes_and_infer_types()
 
         else:
-            logger.warning("[Warning] No suitable inputs found to reshape.")
+            logger.warning("[Warning] No inputs found to reshape.")
 
         # 4. Save Optimized & Reshaped Binary
         logger.info(f">>> [Bake] Saving optimized binaries to {output_dir}...")
@@ -170,7 +146,7 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         del ov_model_obj
         gc.collect()
 
-        # 6. Verification (Safe Read-Only Check)
+        # 6. Verification
         logger.info(">>> [Bake] Verifying static shapes...")
         core = ov.Core()
         xml_path = os.path.join(output_dir, "openvino_model.xml")
@@ -179,18 +155,12 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             verify_model = core.read_model(xml_path)
             success = True
 
-            # Verify Inputs
             for input_node in verify_model.inputs:
                 ps = input_node.get_partial_shape()
                 logger.info(f"    > [Verify Input] {input_node.any_name}: {ps}")
                 if ps.is_dynamic:
-                    logger.error(f"[ERROR] Node {input_node.any_name} is still dynamic! NPU requires STATIC shapes.")
+                    logger.error(f"[ERROR] Node {input_node.any_name} is still dynamic!")
                     success = False
-
-            # Verify Output (Just for info)
-            for output_node in verify_model.outputs:
-                 ps = output_node.get_partial_shape()
-                 logger.info(f"    > [Verify Output] {output_node.any_name}: {ps}")
 
             if not success:
                 logger.critical(">>> [Bake] FATAL: Failed to make model fully static.")

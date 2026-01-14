@@ -1,0 +1,44 @@
+Task: Fix NPU Dynamic Shape Crash and Runtime Mismatch
+Timestamp: 2026-01-14 03:15:00
+
+Summary of Changes:
+-------------------
+Resolved persistent NPU dynamic shape errors and CPU fallback incompatibilities by implementing a strict "Stateless" architecture.
+1.  **Bake Phase:** Updated `bake_model.py` to aggressively inspect and lock *all* inputs (including 4D KV-cache tensors) to static dimensions `[1, 128]` or `[1, ..., 128, ...]`.
+2.  **Runtime Phase:** Replaced the standard `optimum` generation loop in `supervisor.py` with a custom `run_custom_static_inference` loop. This bypasses the dynamic reshaping logic of the library and ensures every inference request sends a strictly padded `[1, 128]` tensor to the NPU.
+
+Detailed Implementation Notes:
+------------------------------
+1.  **src/python/bake_model.py**:
+    *   **Strict Inspection:** Added logic to iterate over `model.model.inputs` and print exact shapes for debugging.
+    *   **4D Tensor Locking:** Added specific handling for 4D tensors (like `past_key_values`) to force dimensions to `STATIC_SEQ_LEN` (128), overriding dynamic `?` dimensions.
+    *   **Stateless Loading:** Added `use_cache=False` to `OVModelForCausalLM.from_pretrained`. This attempts to remove stateful inputs, but the reshaping logic handles them if they persist.
+    *   **Validation:** Retained `validate_nodes_and_infer_types()` to ensure internal graph correctness.
+
+2.  **src/python/supervisor.py**:
+    *   **Custom Inference Loop:** Implemented `run_custom_static_inference`.
+        *   **Manual Padding:** In every step of the generation loop, the input sequence is manually padded with the `pad_token_id` to exactly 128 tokens.
+        *   **Direct Infer Call:** Instead of `model.generate()`, the script now calls `self.model.request.infer(inputs_dict)`. This provides low-level control, preventing `optimum` from stripping padding or optimizing shapes dynamically.
+        *   **Stateless Execution:** The loop re-sends the full context (growing prompt + new tokens + padding) on every step, which is compatible with the "Fixed Window" nature of the static NPU graph.
+    *   **Metrics Update:** Updated TPS and TTFT calculations to work with the custom loop's timing data.
+
+Fixes & Caveats:
+----------------
+*   **Fix:** Resolved `ZE_RESULT_ERROR_INVALID_ARGUMENT` (NPU Dynamic Shape) by ensuring every single input node in the baked IR is static.
+*   **Fix:** Resolved `RuntimeError: incompatible shapes` on CPU/NPU by feeding strictly 128-token tensors.
+*   **Caveat:** Inference is O(N^2) computationally because KV-cache is effectively disabled (or re-computed) for the static window. This is acceptable for short contexts (128 tokens) on the NPU.
+*   **Caveat:** Max output length is strictly bounded. The model will stop exactly at 128 tokens total context.
+
+Usage Instructions:
+-------------------
+1.  **Re-Bake:**
+    ```bash
+    python src/python/bake_model.py --model_id "Intel/neural-chat-7b-v3-1"
+    ```
+2.  **Run:**
+    ```bash
+    python src/python/supervisor.py \
+        --model_xml ./offering_int4_binary/openvino_model.xml \
+        --tokenizer_id "Intel/neural-chat-7b-v3-1" \
+        --prompt "List the planets."
+    ```
