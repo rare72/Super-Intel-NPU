@@ -111,7 +111,10 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         if new_shapes:
             logger.info("Applying reshape directly to in-memory graph...")
             # This updates the model object held by 'model' (OVModelForCausalLM)
-            model.reshape(new_shapes)
+            # FIX: Call reshape on the underlying openvino.runtime.Model object (ov_model_obj)
+            # because OVModelForCausalLM.reshape() expects specific args (batch, seq_len)
+            # and does not accept a dictionary of PartialShapes.
+            ov_model_obj.reshape(new_shapes)
         else:
             logger.warning("[Warning] No suitable inputs found to reshape.")
 
