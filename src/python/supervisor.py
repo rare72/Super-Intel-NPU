@@ -86,6 +86,11 @@ class OfferingSupervisor:
                 compile=True,
                 use_cache=False # IMPORTANT: Match bake settings
             )
+
+            # Inspect inputs to determine if beam_idx is required
+            self.model_input_names = [input.any_name for input in self.model.request.model_inputs]
+            print(f"[Supervisor] Model Inputs: {self.model_input_names}")
+
             print(f"[Supervisor] SUCCESS: Model loaded on {self.device}.")
             self.active_device = self.device
         except Exception as e:
@@ -223,9 +228,12 @@ class OfferingSupervisor:
             inputs_dict = {
                 "input_ids": static_input_ids.numpy().astype(np.int64),
                 "attention_mask": static_attention_mask.numpy().astype(np.int64),
-                "position_ids": static_position_ids.numpy().astype(np.int64),
-                "beam_idx": np.array([0], dtype=np.int32) # Force beam_idx
+                "position_ids": static_position_ids.numpy().astype(np.int64)
             }
+
+            # Conditionally add beam_idx if the model expects it
+            if any("beam_idx" in name for name in self.model_input_names):
+                inputs_dict["beam_idx"] = np.array([0], dtype=np.int32)
 
             # DEBUG: Print shapes once
             if i == 0:
