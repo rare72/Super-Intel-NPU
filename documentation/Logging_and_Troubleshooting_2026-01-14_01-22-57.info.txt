@@ -1,0 +1,32 @@
+Task: Logging and Troubleshooting Enhancement
+Date: 2026-01-14_01-22-57
+
+Summary of Updates:
+Enhanced `bake_model.py` with robust logging capabilities to aid in troubleshooting "Bus errors" and other crashes during the model conversion process. The script now captures full stack traces and supports file-based logging.
+
+Detailed Changes:
+1.  **Logging Module Integration**:
+    -   Replaced simple `print` statements with `logging` module calls.
+    -   Added `--verbose` flag to enable DEBUG-level logging to stdout.
+    -   Added `--log_file` flag (default: `bake_model.log`) to persist logs to disk.
+
+2.  **Crash Capture**:
+    -   Wrapped the main execution logic in a global `try...except` block.
+    -   Uses `traceback.format_exc()` to write the exact error trace to the log file before exiting. This is critical for diagnosing memory access violations or library conflicts.
+
+3.  **Documentation**:
+    -   Updated README with a "Troubleshooting / Debugging" section.
+    -   Provides the exact command to run for capturing debug logs.
+
+Usage for Troubleshooting:
+```bash
+python src/python/bake_model.py \
+    --model_id Intel/neural-chat-7b-v3-1 \
+    --output_dir ./models/neuralchat_int4 \
+    --verbose \
+    --log_file bake_debug.txt
+```
+
+Technical Metrics:
+-   **Log Format**: `%(asctime)s - %(levelname)s - %(message)s`
+-   **Default Log Level**: INFO (console), DEBUG (file)
