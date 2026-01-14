@@ -78,80 +78,80 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             quantization_config=quantization_config
         )
 
-        # 4. Save Initial Binary
+        # 3b. IN-MEMORY RESHAPE (Fix for Bus Error)
+        # Instead of saving then re-reading (which causes mmap conflicts),
+        # we reshape the graph object directly in memory before the first save.
+        logger.info(f">>> [Bake] Remediation: Enforcing STRICT STATIC shapes [{STATIC_BATCH_SIZE}, {STATIC_SEQ_LEN}] in-memory...")
+
+        # Access the underlying OpenVINO model object
+        ov_model_obj = model.model
+        new_shapes = {}
+
+        for input_node in ov_model_obj.inputs:
+            partial_shape = input_node.get_partial_shape()
+
+            # Identify inputs that look like [Batch, SeqLen, ...]
+            if len(partial_shape) >= 2:
+                new_shape_list = []
+                new_shape_list.append(STATIC_BATCH_SIZE) # Index 0: Batch
+                new_shape_list.append(STATIC_SEQ_LEN)    # Index 1: Sequence Length
+
+                # Keep remaining dimensions static if they exist
+                if len(partial_shape) > 2:
+                    for i in range(2, len(partial_shape)):
+                        dim = partial_shape[i]
+                        if dim.is_static:
+                            new_shape_list.append(dim.get_length())
+                        else:
+                            new_shape_list.append(dim) # Keep dynamic if unknown (unlikely for KV cache usually)
+
+                new_shapes[input_node.any_name] = ov.PartialShape(new_shape_list)
+                logger.info(f"    > Locking {input_node.any_name} to {new_shape_list}")
+
+        if new_shapes:
+            logger.info("Applying reshape directly to in-memory graph...")
+            # This updates the model object held by 'model' (OVModelForCausalLM)
+            model.reshape(new_shapes)
+        else:
+            logger.warning("[Warning] No suitable inputs found to reshape.")
+
+        # 4. Save Optimized & Reshaped Binary
         logger.info(f">>> [Bake] Saving optimized binaries to {output_dir}...")
         model.save_pretrained(output_dir)
 
+        # 5. Save Tokenizer
+        logger.info(">>> [Bake] Saving Tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(staging_dir)
+        tokenizer.save_pretrained(output_dir)
+
         # CRITICAL MEMORY CLEANUP
-        logger.info(">>> [Bake] Cleaning up memory before reshaping...")
+        logger.info(">>> [Bake] Cleaning up memory...")
         del model
+        del ov_model_obj
         gc.collect()
 
-        # 5. NPU Shape Remediation (Post-Processing)
-        logger.info(f">>> [Bake] Remediation: Enforcing STRICT STATIC shapes [{STATIC_BATCH_SIZE}, {STATIC_SEQ_LEN}]...")
-
+        # 6. Verification (Safe Read-Only Check)
+        logger.info(">>> [Bake] Verifying static shapes...")
         core = ov.Core()
         xml_path = os.path.join(output_dir, "openvino_model.xml")
 
         if os.path.exists(xml_path):
-            logger.info(f"Reading model from {xml_path}")
-            ov_model = core.read_model(xml_path)
+            verify_model = core.read_model(xml_path)
+            success = True
+            for input_node in verify_model.inputs:
+                ps = input_node.get_partial_shape()
+                logger.info(f"    > [Verify] {input_node.any_name}: {ps}")
+                if ps.is_dynamic:
+                    logger.error(f"[ERROR] Node {input_node.any_name} is still dynamic! NPU requires STATIC shapes.")
+                    success = False
 
-            new_shapes = {}
-            for input_node in ov_model.inputs:
-                partial_shape = input_node.get_partial_shape()
-
-                if len(partial_shape) >= 2:
-                    new_shape_list = []
-                    new_shape_list.append(STATIC_BATCH_SIZE)
-                    new_shape_list.append(STATIC_SEQ_LEN)
-
-                    if len(partial_shape) > 2:
-                        for i in range(2, len(partial_shape)):
-                            dim = partial_shape[i]
-                            if dim.is_static:
-                                new_shape_list.append(dim.get_length())
-                            else:
-                                new_shape_list.append(dim)
-
-                    new_shapes[input_node.any_name] = ov.PartialShape(new_shape_list)
-                    logger.info(f"    > Locking {input_node.any_name} to {new_shape_list}")
-
-            if new_shapes:
-                logger.info("Applying reshape...")
-                ov_model.reshape(new_shapes)
-                logger.info("Saving reshaped model...")
-                ov.save_model(ov_model, xml_path)
-                logger.info(">>> [Bake] Static Remediation Applied. Verifying...")
-
-                # VERIFICATION STEP
-                del ov_model
-                gc.collect()
-
-                logger.info("Reloading for verification...")
-                verify_model = core.read_model(xml_path)
-                success = True
-                for input_node in verify_model.inputs:
-                    ps = input_node.get_partial_shape()
-                    logger.info(f"    > [Verify] {input_node.any_name}: {ps}")
-                    if ps.is_dynamic:
-                        logger.error(f"[ERROR] Node {input_node.any_name} is still dynamic! NPU requires STATIC shapes.")
-                        success = False
-
-                if not success:
-                    logger.critical(">>> [Bake] FATAL: Failed to make model fully static.")
-                    sys.exit(1)
-                else:
-                    logger.info(">>> [Bake] Verification Passed: Model is fully static.")
+            if not success:
+                logger.critical(">>> [Bake] FATAL: Failed to make model fully static.")
+                sys.exit(1)
             else:
-                logger.warning("[Warning] No suitable inputs found to reshape.")
+                logger.info(">>> [Bake] Verification Passed: Model is fully static.")
         else:
-            logger.error("[Warning] XML file not found for reshaping.")
-
-        # 6. Save Tokenizer
-        logger.info(">>> [Bake] Saving Tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(staging_dir)
-        tokenizer.save_pretrained(output_dir)
+             logger.error(">>> [Bake] Error: Saved model file not found.")
 
         logger.info(f">>> [Bake] Success! Optimized NPU-ready model is at {output_dir}")
 
