@@ -1,0 +1,24 @@
+Summary of Changes:
+Fixed a critical error during the model baking verification process where `beam_idx` remained dynamic (`?`), causing the Intel NPU driver (Level Zero) to reject the model.
+
+Detailed Implementation Notes:
+1.  **Updated `src/python/bake_model.py`:**
+    *   Refactored the in-memory reshaping loop.
+    *   Added explicit check for `beam_idx` to enforce shape `[1]` (matching `STATIC_BATCH_SIZE=1`).
+    *   Changed the generic "reshape anything > 2D" logic to a stricter check for `input_ids`, `attention_mask`, and `position_ids` to enforce `[1, 1024]`.
+    *   Added a logging safeguard for other dynamic inputs (like potential KV cache inputs) to warn instead of blindly reshaping them, which could corrupt the model graph for 4D inputs.
+
+Fixes & Caveats:
+*   **Fix:** `beam_idx` is now locked to `[1]`.
+*   **Fix:** `input_ids`, `attention_mask`, `position_ids` are locked to `[1, 1024]`.
+*   **Caveat:** This baking process assumes the model is consumed by an inference engine that respects these static shapes (padding prompt to 1024 tokens).
+*   **Hardware Constraint:** The Intel NPU requires fully static shapes for performance and stability with the Level Zero driver.
+
+Usage Instructions:
+*   Run the bake script:
+    `python3 src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1`
+
+Technical Metrics:
+*   Batch Size: 1 (Strict)
+*   Sequence Length: 1024 (Strict)
+*   Quantization: NNCF INT4 (Data-Free)
