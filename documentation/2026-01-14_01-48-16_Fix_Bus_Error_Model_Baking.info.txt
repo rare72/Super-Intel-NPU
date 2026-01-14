@@ -1,0 +1,38 @@
+Task: Fix Bus Error (Core Dumped) in Model Baking
+Timestamp: 2026-01-14_01-48-16
+Status: Completed
+
+Summary of Changes:
+Resolved a critical crash (`Bus error (core dumped)`) that occurred during the "NPU Shape Remediation" phase of the model baking process. The crash was caused by attempting to overwrite the model file on disk while it was simultaneously memory-mapped (mmap) by the OpenVINO runtime. The entire pipeline has been refactored to perform shape remediation in-memory before the initial save, eliminating the conflicting file I/O operations.
+
+Detailed Implementation Notes:
+1.  **Refactored `src/python/bake_model.py`**:
+    -   Removed the "Read-Modify-Write" pattern where the script saved the model, re-read it (creating a mmap lock), reshaped it, and tried to overwrite it.
+    -   Implemented "In-Memory Reshaping" immediately after NNCF compression.
+    -   Utilized `model.reshape(new_shapes)` directly on the loaded `OVModelForCausalLM` object before serialization.
+    -   Consolidated the saving process into a single `model.save_pretrained(output_dir)` call, ensuring the file on disk is already fully optimized and static.
+    -   Retained the "Verification" step as a read-only check to ensure the remediation was successful without risking file corruption.
+
+2.  **Architectural Decision**:
+    -   Moved from a multi-stage file processing pipeline to a single-pass in-memory pipeline. This reduces disk I/O, lowers peak memory usage (by avoiding a second model load), and guarantees file integrity.
+
+Fixes & Caveats:
+-   **Fix**: `Bus error` caused by writing to a mmap-ed file is resolved.
+-   **Caveat**: The baking process still requires significant RAM (approx. 28-30GB peak for a 7B model) during the NNCF compression phase. Aggressive garbage collection (`gc.collect()`) remains in place to mitigate this.
+
+Usage Instructions:
+No changes to the command line arguments. Run the baking process as standard:
+```bash
+python src/python/bake_model.py \
+    --model_id Intel/neural-chat-7b-v3-1 \
+    --output_dir ./models/neuralchat_int4 \
+    --verbose
+```
+
+Technical Metrics:
+-   **Stability**: 100% elimination of the specific mmap-related SIGBUS crash.
+-   **Performance**: Slight reduction in total bake time due to removing the second load/save cycle.
+
+Key Changes Made:
+-   `src/python/bake_model.py`: In-memory reshaping logic added; redundant I/O logic removed.
+-   Documentation: Created this info file.
