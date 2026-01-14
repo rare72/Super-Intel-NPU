@@ -178,7 +178,14 @@ class OfferingSupervisor:
             input_len = STATIC_SEQ_LEN
 
         # 2. Loop Configuration
-        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+        # Ensure pad_id is valid
+        if self.tokenizer.pad_token_id is not None:
+             pad_id = self.tokenizer.pad_token_id
+        elif self.tokenizer.eos_token_id is not None:
+             pad_id = self.tokenizer.eos_token_id
+        else:
+             pad_id = 0
+
         current_ids = input_ids
         current_mask = attention_mask
 
@@ -213,14 +220,18 @@ class OfferingSupervisor:
             request = self.model.request
 
             # Build input dict matching typical OpenVINO expected names
-            # Note: names must match what is in the .xml.
-            # Usually: input_ids, attention_mask, position_ids
             inputs_dict = {
-                "input_ids": static_input_ids.numpy(),
-                "attention_mask": static_attention_mask.numpy(),
-                "position_ids": static_position_ids.numpy(),
+                "input_ids": static_input_ids.numpy().astype(np.int64),
+                "attention_mask": static_attention_mask.numpy().astype(np.int64),
+                "position_ids": static_position_ids.numpy().astype(np.int64),
                 "beam_idx": np.array([0], dtype=np.int32) # Force beam_idx
             }
+
+            # DEBUG: Print shapes once
+            if i == 0:
+                print(f"[DEBUG] Infer Input Shapes: input_ids={inputs_dict['input_ids'].shape}, "
+                      f"att={inputs_dict['attention_mask'].shape}, "
+                      f"pos={inputs_dict['position_ids'].shape}")
 
             # C. Run Inference
             try:

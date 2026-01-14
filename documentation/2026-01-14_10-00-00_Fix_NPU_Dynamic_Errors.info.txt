@@ -1,0 +1,47 @@
+Task: Fix NPU Dynamic Shape Error & Static Inference Compatibility
+Date: 2026-01-14
+Timestamp: 10:00:00
+
+Summary of Changes:
+-------------------
+Resolved the persistent Intel NPU `ZE_RESULT_ERROR_INVALID_ARGUMENT` and `to_shape was called on a dynamic shape` errors. These errors were caused by the NPU driver's strict requirement for static shapes colliding with `optimum-intel`'s default export behavior (which includes dynamic axes).
+
+Key fixes involve implementing a "2-Stage Bake" process and a "Bulletproof Static Inference Loop".
+
+Detailed Implementation Notes:
+------------------------------
+1.  **Refactored `src/python/bake_model.py` (2-Stage Bake):**
+    *   **Stage 1:** Uses `optimum.intel` to handle the complexity of downloading, converting to IR, and applying NNCF INT4 compression. This output remains dynamic (e.g., `batch: -1`). It is saved to a temporary `intermediate_dynamic/` folder.
+    *   **Stage 2:** Loads the intermediate model using the pure `openvino.runtime.Core` API. This strips away `optimum`'s wrapper metadata.
+    *   **Reshape:** Applies strict static reshaping (`[1, 128]`) to the pure OpenVINO model object.
+    *   **Serialize:** Saves the final static model using `ov.save_model`. This forces the runtime to "constant fold" and resolve all dynamic shape operations into static integers before the NPU driver ever sees the graph.
+    *   **Benefit:** This completely eliminates the `to_shape was called on a dynamic shape` error during NPU compilation.
+
+2.  **Refactored `src/python/supervisor.py`:**
+    *   **Explicit Padding Logic:** Rewrote the inference loop to calculate `pad_len` and create `padding_ids` using `torch.full`.
+    *   **Type Safety:** Forced input tensors to `np.int64` and `np.int32` (for beam_idx) to prevent type mismatches in the OpenVINO plugin.
+    *   **Debug Telemetry:** Added a one-time debug print: `[DEBUG] Infer Input Shapes: ...` to verify exactly what dimensions are being sent to the hardware.
+    *   **Fallback Safety:** Added checks to ensure `pad_id` defaults to 0 if the tokenizer config is incomplete.
+
+Fixes & Caveats:
+----------------
+*   **Fix:** Resolved "incompatible shapes" CPU fallback error by guaranteeing the input tensor is always padded to 128 tokens, matching the baked model.
+*   **Fix:** Resolved NPU "Invalid Argument" by removing all dynamic dimensions from the serialized IR.
+*   **Caveat:** The `STATIC_SEQ_LEN` is hardcoded to 128. If a prompt exceeds this, it is truncated. This is a necessary trade-off for consumer NPU stability.
+*   **Caveat:** The inference is "stateless" (re-computes full context every token). This is slower than KV-caching but is the only stable method for the current NPU driver version on Core Ultra.
+
+Usage Instructions:
+-------------------
+1.  **Re-Bake the Model (Mandatory):**
+    You must delete old artifacts and run the new bake script to generate the static IR.
+    `python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4`
+
+2.  **Run Inference:**
+    `python src/python/supervisor.py --model_xml ./models/neuralchat_int4/openvino_model.xml --tokenizer_id Intel/neural-chat-7b-v3-1 --prompt "Your prompt here"`
+
+Technical Metrics:
+------------------
+*   **Target Hardware:** Intel Core Ultra (NPU/AI Boost).
+*   **Shape Config:** Batch=1, Sequence=128 (Static).
+*   **Precision:** INT4 (Symmetric/Asymmetric via NNCF).
+*   **Inference Mode:** Greedy Decoding (Argmax), Stateless.
