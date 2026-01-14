@@ -107,7 +107,7 @@ The supervisor now outputs detailed execution statistics on exit:
 ...
 ```
 
-## Troubleshooting
+## Troubleshooting / Debugging
 
 ### Setup Script Fails on Ubuntu 24.04
 If you see errors about `libegl1-mesa` or `intel-level-zero-gpu` not being found:
@@ -125,3 +125,16 @@ If `verify_install.py` does not list 'NPU':
 If the supervisor logs `Upper bounds are not specified` or `to_shape was called on a dynamic shape`:
 1.  This means the model on disk does not have NPU-compatible shapes.
 2.  **Fix:** Delete your baked model directory (e.g., `rm -rf ./models/neuralchat_int4`) and re-run `bake_model.py`. The new script enforces bounded shapes.
+
+### Bake Process Crashes
+If `bake_model.py` crashes (e.g., Bus Error, Segfault) or fails silently:
+1.  Run with verbose logging enabled:
+    ```bash
+    python src/python/bake_model.py \
+        --model_id Intel/neural-chat-7b-v3-1 \
+        --output_dir ./models/neuralchat_int4 \
+        --verbose \
+        --log_file debug_bake.log
+    ```
+2.  Check `debug_bake.log` for the exact stack trace.
+3.  Ensure you have at least 16GB of available RAM/Swap, as the reshaping process loads the model graph.
