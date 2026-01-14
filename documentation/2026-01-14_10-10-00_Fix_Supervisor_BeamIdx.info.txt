@@ -1,0 +1,28 @@
+Task: Fix Supervisor BeamIdx Error
+Timestamp: 2026-01-14 10:10:00
+
+Summary of Changes:
+Modified `src/python/supervisor.py` to dynamically inspect the OpenVINO model inputs before inference. The script now conditionally adds `beam_idx` to the input dictionary only if the model explicitly requests it. This resolves crash errors when using models exported via `optimum-intel` that do not include `beam_idx` in their signature (common with `use_cache=False`).
+
+Detailed Implementation Notes:
+- Updated `OfferingSupervisor.load_inference_engine`:
+  - Added logic to inspect `self.model.request.model_inputs`.
+  - Stored `model_input_names` for later use in the inference loop.
+  - Added logging to print discovered model inputs for debugging.
+- Updated `run_custom_static_inference`:
+  - Removed the hardcoded `beam_idx` insertion.
+  - Added a conditional check: `if any("beam_idx" in name for name in self.model_input_names): inputs_dict["beam_idx"] = ...`.
+  - This ensures `inputs_dict` strictly matches the model's expected inputs, preventing `INVALID_INPUT` errors from the OpenVINO runtime.
+
+Fixes & Caveats:
+- **Fix:** resolved potential `RuntimeError: Port beam_idx is not found` on NPU inference.
+- **Caveat:** The model must still strictly adhere to the `[1, 128]` static shape for `input_ids`, `attention_mask`, and `position_ids` as enforced by the bake script.
+
+Usage Instructions:
+No change to command usage.
+Example:
+`python src/python/supervisor.py --model_xml ./models/neuralchat_int4 --tokenizer_id Intel/neural-chat-7b-v3-1 --prompt "Hello world"`
+
+Technical Metrics:
+- Verified syntax via `py_compile`.
+- Logic supports both legacy models (with beam_idx) and new static exports (without beam_idx).
