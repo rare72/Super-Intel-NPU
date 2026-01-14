@@ -2,6 +2,7 @@ import os
 import json
 import argparse
 import shutil
+import gc
 from pathlib import Path
 from huggingface_hub import snapshot_download
 from optimum.intel import OVModelForCausalLM
@@ -48,6 +49,14 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
     print(f">>> [Bake] Saving optimized binaries to {output_dir}...")
     model.save_pretrained(output_dir)
 
+    # CRITICAL MEMORY CLEANUP
+    # The Bus Error (Core Dumped) occurs because we hold the massive 'model' object
+    # while trying to reload it via OpenVINO Core for reshaping.
+    # We must free this memory before proceeding.
+    print(">>> [Bake] Cleaning up memory before reshaping...")
+    del model
+    gc.collect()
+
     # 5. NPU Shape Remediation (Post-Processing)
     print(f">>> [Bake] Remediation: Enforcing STRICT STATIC shapes [{STATIC_BATCH_SIZE}, {STATIC_SEQ_LEN}]...")
     try:
@@ -65,9 +74,6 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
                 # We target dimensions that are commonly dynamic
                 if len(partial_shape) >= 2:
                     # STRICT STATIC SHAPES
-                    # We are locking the model to exactly 1024 tokens.
-                    # Supervisor MUST pad inputs to this length.
-
                     new_shape_list = []
                     # Dimension 0: Batch
                     new_shape_list.append(STATIC_BATCH_SIZE)
@@ -75,16 +81,12 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
                     new_shape_list.append(STATIC_SEQ_LEN)
 
                     # Preserve remaining dimensions (e.g. hidden size, past_key_values)
-                    # Usually remaining dims are already static in exported models
                     if len(partial_shape) > 2:
                         for i in range(2, len(partial_shape)):
                             dim = partial_shape[i]
                             if dim.is_static:
                                 new_shape_list.append(dim.get_length())
                             else:
-                                # If internal dims are dynamic, we must assume a standard head size or
-                                # try to keep it dynamic if the driver allows, but usually we want static.
-                                # For safety, we keep it as-is if it's not the main seq axis.
                                 new_shape_list.append(dim)
 
                     new_shapes[input_node.any_name] = ov.PartialShape(new_shape_list)
@@ -96,6 +98,9 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
                 print(">>> [Bake] Static Remediation Applied. Verifying...")
 
                 # VERIFICATION STEP
+                del ov_model
+                gc.collect()
+
                 verify_model = core.read_model(xml_path)
                 success = True
                 for input_node in verify_model.inputs:
