@@ -1,0 +1,35 @@
+Proposed Release Process (Draft)
+
+Summary:
+This document outlines the proposed workflow for packaging the New Offering for distribution. This process is currently NOT implemented in the active codebase but is documented here for future reference.
+
+Process Overview:
+1.  **Artifact Consolidation:**
+    - Collect the `supervisor.py` script.
+    - Collect the compiled C++ Executive binary (`executive_shard`).
+    - Collect the baked model directory (containing `openvino_model.xml`, `.bin`, and tokenizer configs).
+
+2.  **Directory Structure:**
+    Create a `release_vX.X/` folder with the following layout:
+    ```
+    release_v1.0/
+    ├── bin/
+    │   └── executive_shard  (C++ Binary)
+    ├── models/
+    │   └── [Model_Name]/    (Baked Artifacts)
+    ├── supervisor.py        (Python Runtime)
+    └── run.sh               (User Entry Point)
+    ```
+
+3.  **Runner Script (`run.sh`):**
+    A shell script should be generated to abstract the Python command arguments. It should:
+    - Set the PYTHONPATH if necessary.
+    - Point `--model_xml` to the local `models/` subdirectory.
+    - Point `--device` to NPU by default.
+
+4.  **Distribution:**
+    - The `release_v1.0/` folder can be zipped and distributed to end-users.
+    - Users only need to install the Intel drivers and Python dependencies listed in `requirements.txt` (or a setup script).
+
+Reasoning:
+This approach isolates the runtime environment from the development source code (`src/`), ensuring end-users do not accidentally modify baking logic or build scripts.
