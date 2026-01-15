@@ -1,0 +1,22 @@
+Script started on 2026-01-14 19:13:52-05:00 [COMMAND="optimum-cli export openvino     --model /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/model_staging     --task text-generation-with-past     --weight-format int4     --sym     --ratio 1.0     --group-size 128" TERM="xterm-256color" TTY="/dev/pts/4" COLUMNS="104" LINES="17"]
+usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt}]
+                                   [--trust-remote-code]
+                                   [--weight-format {fp32,fp16,int8,int4,mxfp4,nf4,cb4}]
+                                   [--quant-mode {int8,f8e4m3,f8e5m2,cb4_f8e4m3,int4_f8e4m3,int4_f8e5m2}]
+                                   [--library {transformers,diffusers,timm,sentence_transformers,open_clip}]
+                                   [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID]
+                                   [--variant VARIANT] [--ratio RATIO] [--sym]
+                                   [--group-size GROUP_SIZE]
+                                   [--group-size-fallback {error,ignore,adjust}]
+                                   [--backup-precision {none,int8_sym,int8_asym}] [--dataset DATASET]
+                                   [--all-layers] [--awq] [--scale-estimation] [--gptq]
+                                   [--lora-correction] [--sensitivity-metric SENSITIVITY_METRIC]
+                                   [--quantization-statistics-path QUANTIZATION_STATISTICS_PATH]
+                                   [--num-samples NUM_SAMPLES] [--disable-stateful]
+                                   [--disable-convert-tokenizer]
+                                   [--smooth-quant-alpha SMOOTH_QUANT_ALPHA]
+                                   [--model-kwargs MODEL_KWARGS]
+                                   output
+optimum-cli export openvino: error: the following arguments are required: output
+
+Script done on 2026-01-14 19:13:52-05:00 [COMMAND_EXIT_CODE="2"]

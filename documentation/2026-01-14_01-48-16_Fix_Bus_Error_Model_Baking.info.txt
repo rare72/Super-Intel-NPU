@@ -29,6 +29,15 @@ python src/python/bake_model.py \
     --verbose
 ```
 
+optimum-cli export openvino \
+    --model Intel/neural-chat-7b-v3-1 \
+    --task text-generation-with-past \
+    --weight-format int4 \
+    --sym \
+    --ratio 1.0 \
+    --group-size 128 \
+    ./models/neuralchat_int4
+
 Technical Metrics:
 -   **Stability**: 100% elimination of the specific mmap-related SIGBUS crash.
 -   **Performance**: Slight reduction in total bake time due to removing the second load/save cycle.
