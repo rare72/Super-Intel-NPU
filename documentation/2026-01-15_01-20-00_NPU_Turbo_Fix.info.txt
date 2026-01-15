@@ -1,0 +1,42 @@
+# Task: NPU Turbo Fix and Logging Implementation
+# Date: 2026-01-15
+# Timestamp: 2026-01-15_01-20-00
+
+Summary of Changes:
+1.  **NPU Stability Fix**: Disabled "NPU Turbo" mode in `src/python/supervisor.py`. This addresses the `ZE_RESULT_ERROR_UNKNOWN` (0x7ffffffe) error by stabilizing the Intel Level Zero driver execution on Linux.
+2.  **Input Precision Revert**: Reverted the forced 32-bit integer casting in `src/python/bake_model.py`. The model will now retain 64-bit precision for inputs (input_ids, attention_mask) as originally designed, respecting the user's constraint against downgrading precision.
+3.  **Diagnostic Logging**: Implemented a persistent logging mechanism in `src/python/supervisor.py`.
+    *   Creates a `log/` directory.
+    *   Generates session-specific logs named `history_[YYYY-MM-DD_HH-MM-SS].log.txt`.
+    *   Captures metrics, warm-up status, and runtime exceptions for performance tracking.
+
+Detailed Implementation Notes:
+*   **`src/python/supervisor.py`**:
+    *   Added `core.set_property("NPU", {"NPU_TURBO": "OFF"})` in the NPU loading block.
+    *   Added `log_history(self, log_entry)` method to `OfferingSupervisor` class.
+    *   Updated `print_metrics`, `warmup_model`, and `run_custom_static_inference` to write to the log file.
+*   **`src/python/bake_model.py`**:
+    *   Removed the conditional block that checked for `ov.Type.i64` and set element type to `ov.Type.i32`.
+
+Fixes & Caveats:
+*   **Fix**: The primary fix for `ZE_RESULT_ERROR_UNKNOWN` is the NPU Turbo disablement. This is a known workaround for Intel NPU drivers on Linux kernels where Turbo mode causes synchronization loss.
+*   **Caveat**: Disabling Turbo might result in slightly lower peak inference speed (Tokens Per Second), but ensures stability.
+*   **Caveat**: Input precision is now 64-bit. If the specific NPU driver version on the user's machine strictly requires 32-bit (which was the motivation for the previous rejected PR), this might still crash. However, the Turbo fix is the user-approved path.
+
+Usage Instructions:
+1.  **Bake the Model** (if not already done or to ensure no 32-bit cast exists):
+    ```bash
+    python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4
+    ```
+2.  **Run Inference**:
+    ```bash
+    python src/python/supervisor.py --model_xml ./models/neuralchat_int4 --prompt "Hello world"
+    ```
+3.  **Check Logs**:
+    *   Logs are stored in `log/history_[TIMESTAMP].log.txt`.
+    *   Monitor these logs for "Warm-up successful" or exception details.
+
+Technical Metrics:
+*   Default Static Sequence Length: 128
+*   Batch Size: 1
+*   NPU Turbo: OFF

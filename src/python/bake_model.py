@@ -109,8 +109,9 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         for input_node in ov_model.inputs:
             name = input_node.any_name
             partial_shape = input_node.get_partial_shape()
-            logger.info(f"    > Found Input: {name}, Shape: {partial_shape}")
+            logger.info(f"    > Found Input: {name}, Shape: {partial_shape}, Type: {input_node.get_element_type()}")
 
+            # --- SHAPE REMEDIATION ---
             # 1. Handle beam_idx (if present)
             if "beam_idx" in name:
                 new_shapes[name] = ov.PartialShape([STATIC_BATCH_SIZE])
@@ -139,7 +140,7 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         if new_shapes:
             logger.info("Applying reshape to graph...")
             ov_model.reshape(new_shapes)
-            # Propagate to freeze constants
+            # Propagate to freeze constants and infer new types
             ov_model.validate_nodes_and_infer_types()
 
         # 5. Save Final Static Model
@@ -185,10 +186,17 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
 
         for input_node in verify_model.inputs:
             ps = input_node.get_partial_shape()
-            logger.info(f"    > [Verify Input] {input_node.any_name}: {ps}")
+            pt = input_node.get_element_type()
+            logger.info(f"    > [Verify Input] {input_node.any_name}: Shape={ps}, Type={pt}")
+
             if ps.is_dynamic:
                 logger.error(f"[ERROR] Node {input_node.any_name} is still dynamic!")
                 success = False
+
+            # Verify Precision Fix
+            if pt == ov.Type.i64:
+                logger.warning(f"[WARNING] Node {input_node.any_name} is still I64! This may crash Intel NPU.")
+                # We don't fail here, but we warn heavily.
 
         if not success:
             logger.critical(">>> [Bake] FATAL: Failed to make model fully static.")
