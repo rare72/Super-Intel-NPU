@@ -69,7 +69,7 @@ def bake_qwen(staging_dir, output_dir, config_path):
             "group_size": 128,
             "ratio": 1.0, # Full compression
             # Qwen specific: ignore norm layers if sensitive
-            "ignored_scope": {"types": ["MVN", "Normalize", "ReduceMean"]}
+            "ignored_scope": {"types": []}
         }
 
         # 2. Stage 1: Export & Compress (Dynamic)
