@@ -22,10 +22,25 @@ A high-performance hybrid inference engine for Intel Core Ultra NPU, designed fo
     python src/python/bake_model.py
     ```
 
-3.  **Run Inference:**
+3.  **Run Inference (Recommended):**
+    Use the master launch script to ensure hardware health and proper logging.
+    ```bash
+    ./launch.sh
+    ```
+
+    *Alternatively (Advanced):*
     ```bash
     python src/python/supervisor.py --prompt "Explain quantum computing"
     ```
+
+## Diagnostic Tools
+
+The project includes a suite of tools to prevent NPU hangs:
+
+*   **`./launch.sh`**: The master switch. Handles Hard Reset -> Vitals Check -> Execution.
+*   **`scripts/npu_reset.sh`**: Hard resets the Linux kernel NPU driver (use if device disappears).
+*   **`src/python/preflight_check.py`**: Audits the model binary to ensure it fits in NPU memory (INT4 verification).
+*   **`src/python/npu_vitals.py`**: checks Thermal and RAM status.
 
 ## Documentation
 See the `documentation/` folder for detailed technical logs of architecture decisions and fixes.
