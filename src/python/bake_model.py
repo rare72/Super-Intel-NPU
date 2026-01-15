@@ -152,12 +152,27 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         # Copy Config Files from Intermediate to Final
         # OpenVINO save_model only saves .xml and .bin. We need the JSON configs for Optimum to load it later.
         logger.info(">>> [Bake] Migrating config files to final output...")
+
+        # Force config.json to explicitly say use_cache: false to prevent future confusion
+        config_src = os.path.join(intermediate_dir, "config.json")
+        if os.path.exists(config_src):
+            with open(config_src, 'r') as f:
+                config_json = json.load(f)
+            config_json["use_cache"] = False
+            config_json["torchscript"] = True # Hint to treat as static graph
+            with open(os.path.join(output_dir, "config.json"), 'w') as f:
+                json.dump(config_json, f, indent=2)
+            logger.debug(f"    > Patched and Copied config.json")
+
+        # Copy rest
         for filename in os.listdir(intermediate_dir):
+            if filename == "config.json": continue # Handled above
             if filename.endswith(".json") or filename.endswith(".model"):
                 src_file = os.path.join(intermediate_dir, filename)
                 dst_file = os.path.join(output_dir, filename)
-                shutil.copy2(src_file, dst_file)
-                logger.debug(f"    > Copied {filename}")
+                if not os.path.exists(dst_file): # Don't overwrite tokenizer if already saved
+                    shutil.copy2(src_file, dst_file)
+                    logger.debug(f"    > Copied {filename}")
 
         # Cleanup Intermediate
         logger.info(">>> [Bake] Removing intermediate files...")

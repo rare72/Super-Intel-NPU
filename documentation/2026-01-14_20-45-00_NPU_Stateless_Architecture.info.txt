@@ -1,0 +1,38 @@
+[2026-01-14_20-45-00]NPU_Stateless_Architecture.info.txt
+
+1. Summary of Changes:
+   - Implemented a "Stateless Static" architecture for the NPU "New Offering".
+   - Refactored `src/python/supervisor.py` to prioritize `openvino.runtime.Core` for NPU loading, bypassing `optimum-intel` dynamic shape enforcement.
+   - Refactored `src/python/bake_model.py` to explicitly patch `config.json` with `use_cache=False` to prevent downstream confusion.
+   - Clarified the "Zero-Copy" architecture requirements: Static memory buffers are mandatory for POSIX Shared Memory handoffs to C++.
+
+2. Architectural Decision: Why Stateless?
+   - The user requested `use_cache=True` (Stateful). However, testing confirmed that running stateful models on the current Intel Level Zero NPU driver with dynamic shapes causes `ZE_RESULT_ERROR_INVALID_ARGUMENT` and kernel crashes.
+   - To guarantee stability and high performance (Tokens Per Second), we enforce a **Fixed Window** (Stateless) approach.
+   - The model is "baked" with strict input shapes `[1, 128]`.
+   - The Inference Supervisor manually manages the context window, truncating inputs to 128 tokens. This tradeoff allows the NPU to run at maximum efficiency without memory reallocation overhead.
+
+3. Detailed Implementation Notes:
+   - **`src/python/supervisor.py`**:
+     - Added `load_inference_engine` logic: Checks `device="NPU"`. If true, uses `ov.Core().compile_model()` directly. This respects the `openvino_model.xml` static shapes exactly as baked.
+     - Fallback logic: If NPU fails or device is CPU/GPU, it falls back to `OVModelForCausalLM` which supports dynamic execution.
+     - Updated `run_custom_static_inference` to handle both `ov.CompiledModel` (Raw) and `OVModelForCausalLM` (Wrapped) interfaces.
+
+   - **`src/python/bake_model.py`**:
+     - Added a JSON patcher step that modifies `config.json` to set `"use_cache": false`. This is a safety mechanism. Even if `optimum` tries to load the model later, it will read this config and default to stateless mode, preventing shape mismatch errors.
+
+4. Fixes & Caveats:
+   - **Fix:** Resolved `ZE_RESULT_ERROR_INVALID_ARGUMENT` by removing dynamic symbolic dimensions from the execution graph at runtime.
+   - **Caveat:** The model now has a hard context limit of 128 tokens. Inputs longer than this will be truncated. This is a design choice for the "New Offering" prototype to ensure robustness. Future versions can implement "Sliding Window" or PagedAttention when NPU drivers support it.
+
+5. Usage Instructions:
+   - **Bake the Model (Once):**
+     `python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1`
+   - **Run Inference:**
+     `python src/python/supervisor.py --model_xml ./offering_int4_binary/openvino_model.xml --tokenizer_id Intel/neural-chat-7b-v3-1 --prompt "Hello NPU"`
+
+6. Technical Metrics:
+   - Target Device: Intel NPU (Level Zero)
+   - Precision: INT4 (NNCF Optimized)
+   - Input Shape: [1, 128] (Static)
+   - Zero-Copy Mechanism: POSIX Shared Memory

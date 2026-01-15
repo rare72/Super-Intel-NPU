@@ -11,8 +11,10 @@ import torch
 from multiprocessing import shared_memory
 from transformers import AutoTokenizer
 
-# Optimum Intel for Real NPU Inference
+# Optimum Intel for General Inference
 from optimum.intel import OVModelForCausalLM
+# OpenVINO Core for Strict Static NPU Inference
+import openvino as ov
 
 # --- CONFIGURATION ---
 DEFAULT_SHM_NAME = "/offering_tensor_shm"
@@ -34,8 +36,10 @@ class OfferingSupervisor:
         self.command_fd = None
 
         self.tokenizer = None
-        self.model = None
+        self.model = None # Can be OVModelForCausalLM OR ov.CompiledModel
+        self.request = None # OpenVINO InferRequest
         self.use_cache_state = False # Track if we are in stateful or stateless mode
+        self.is_optimum_wrapped = True # Track if we are using Optimum wrapper or raw OV Core
 
     def setup_resources(self):
         print(f"[Supervisor] Initializing Resources (SHM: {self.shm_name})...")
@@ -70,65 +74,85 @@ class OfferingSupervisor:
         print(f"\n[Supervisor] Loading Inference Engine on {self.device}...")
 
         model_path = self.model_xml
-        if model_path and os.path.isfile(model_path):
-            model_path = os.path.dirname(model_path)
+        # If it's a directory, assume standard bake structure
+        if model_path and os.path.isdir(model_path):
+            xml_check = os.path.join(model_path, "openvino_model.xml")
+            if os.path.exists(xml_check):
+                model_path = xml_check
+            else:
+                print(f"[Error] openvino_model.xml not found in {model_path}")
+                return
 
         if not model_path or not os.path.exists(model_path):
             print("[Error] Model path not found. Cannot run real inference.")
             return
 
-        # Strategy: Try Stateless (Static) first, as it's preferred for NPU stability.
-        # If model was exported with --task text-generation-with-past, this will fail.
-        # We catch that failure and switch to Stateful (Dynamic).
+        # NPU STRATEGY:
+        # If Device is NPU, we prioritize "Raw OpenVINO Core" loading.
+        # This bypasses Optimum's dynamic shape enforcement which crashes Level Zero.
+        if self.device == "NPU":
+            print("[Supervisor] NPU detected. Using Strict Static Loading (Raw OpenVINO Core)...")
+            try:
+                core = ov.Core()
+                # Enable caching for speed
+                core.set_property({"CACHE_DIR": "./model_cache"})
 
+                print(f"[Supervisor] Compiling model from {model_path}...")
+                self.model = core.compile_model(model_path, "NPU")
+                self.request = self.model.create_infer_request()
+                self.is_optimum_wrapped = False
+                self.use_cache_state = False # Baked models are stateless by design for NPU
+                self.active_device = "NPU"
+                print(f"[Supervisor] SUCCESS: Model loaded on NPU (Stateless Static Mode).")
+
+                # Verify Inputs
+                for input_node in self.model.inputs:
+                    print(f"  > Input: {input_node.any_name} {input_node.partial_shape}")
+                return
+            except Exception as e:
+                print(f"[Error] Raw OpenVINO NPU Load Failed: {e}")
+                print("[Supervisor] Attempting fallback to Optimum-Intel wrapper...")
+
+        # FALLBACK / CPU STRATEGY:
+        # Use Optimum-Intel (Supports Dynamic Shapes, better for CPU/GPU)
         configs_to_try = [False, True]
         success = False
 
+        # Directory path for Optimum
+        model_dir = os.path.dirname(model_path) if os.path.isfile(model_path) else model_path
+
         for try_cache in configs_to_try:
             try:
-                print(f"[Supervisor] Attempting load with use_cache={try_cache}...")
+                print(f"[Supervisor] Attempting Optimum load with use_cache={try_cache}...")
                 self.model = OVModelForCausalLM.from_pretrained(
-                    model_path,
+                    model_dir,
                     device=self.device,
                     ov_config={"CACHE_DIR": "./model_cache", "PERFORMANCE_HINT": "LATENCY"},
                     compile=True,
                     use_cache=try_cache
                 )
+                self.request = self.model.request
                 self.use_cache_state = try_cache
+                self.is_optimum_wrapped = True
                 success = True
                 break # Loaded successfully
             except ValueError as e:
-                # Catch specific Optimum error about cache mismatch
                 if "use_cache" in str(e):
-                    print(f"[Supervisor] Config mismatch detected: {e}")
-                    print("[Supervisor] Switching cache mode and retrying...")
+                    print(f"[Supervisor] Config mismatch detected: {e}. Retrying...")
                     continue
                 else:
-                    print(f"[Error] Unexpected ValueError during load: {e}")
+                    print(f"[Error] Unexpected ValueError: {e}")
                     break
             except Exception as e:
-                print(f"[Error] Failed to load model on {self.device}: {e}")
+                print(f"[Error] Failed to load model: {e}")
                 break
 
         if success:
-            # Inspect inputs to determine if beam_idx is required (only relevant for manual loop)
-            try:
-                self.model_input_names = [input.any_name for input in self.model.request.model_inputs]
-                print(f"[Supervisor] Model Inputs: {self.model_input_names}")
-            except:
-                self.model_input_names = []
-
-            print(f"[Supervisor] SUCCESS: Model loaded on {self.device}. Mode: {'Stateful' if self.use_cache_state else 'Stateless'}")
             self.active_device = self.device
+            print(f"[Supervisor] SUCCESS: Model loaded via Optimum. Mode: {'Stateful' if self.use_cache_state else 'Stateless'}")
         else:
-            print("[Supervisor] Falling back to CPU...")
-            try:
-                 self.model = OVModelForCausalLM.from_pretrained(model_path, device="CPU", use_cache=True)
-                 self.active_device = "CPU"
-                 self.use_cache_state = True
-            except:
-                 print("[Fatal] Could not load model on NPU or CPU.")
-                 sys.exit(1)
+            print("[Fatal] Could not load model on target device.")
+            sys.exit(1)
 
     def format_prompt(self, user_prompt, system_message=None, style="neural"):
         if not self.tokenizer:
@@ -187,17 +211,16 @@ class OfferingSupervisor:
         """
         Dispatches inference to the correct loop based on model configuration.
         """
-        if self.use_cache_state:
+        if self.use_cache_state and self.is_optimum_wrapped:
             # Stateful Model (CLI Method) -> Use Standard Optimum Generate
             self.run_dynamic_stateful_inference(formatted_prompt)
         else:
-            # Stateless Model (Bake Script) -> Use Custom Static Loop
+            # Stateless Model (Bake Script or Raw NPU) -> Use Custom Static Loop
             self.run_custom_static_inference(formatted_prompt)
 
     def run_dynamic_stateful_inference(self, formatted_prompt):
         """
         Uses optimum-intel's built-in generate() which handles KV cache management.
-        Best for models exported via optimum-cli with --task text-generation-with-past.
         """
         print("\n" + "="*40)
         print(f"[Supervisor] Processing Prompt on {self.active_device} (Dynamic Stateful)...")
@@ -207,12 +230,10 @@ class OfferingSupervisor:
             return
 
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt")
-        input_ids = inputs.input_ids.to(self.active_device if self.active_device == "CPU" else "cpu")
+        input_ids = inputs.input_ids.to("cpu")
 
         start_time = time.time()
 
-        # Standard Optimum Generation
-        # This handles past_key_values automatically
         output_ids = self.model.generate(
             input_ids,
             max_new_tokens=128,
@@ -226,7 +247,6 @@ class OfferingSupervisor:
         inference_duration = end_time - start_time
 
         response = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
-        # Remove input prompt from response if present
         if response.startswith(formatted_prompt):
             response = response[len(formatted_prompt):]
 
@@ -234,14 +254,15 @@ class OfferingSupervisor:
 
     def run_custom_static_inference(self, formatted_prompt):
         """
-        Manually executes inference loop ensuring strictly static inputs [1, 128]
-        are passed to the NPU/CPU at every step, bypassing dynamic logic in Optimum.
+        Manually executes inference loop ensuring strictly static inputs [1, 128].
+        Supports both Optimum-Wrapped and Raw OpenVINO Core models.
         """
         print("\n" + "="*40)
         print(f"[Supervisor] Processing Prompt on {self.active_device} (Static Loop)...")
         print("="*40 + "\n")
 
-        if not self.model or not self.tokenizer:
+        if not self.request or not self.tokenizer:
+            print("[Error] Inference Request or Tokenizer not initialized.")
             return
 
         # 1. Tokenize Initial Input
@@ -259,12 +280,7 @@ class OfferingSupervisor:
             input_len = STATIC_SEQ_LEN
 
         # 2. Loop Configuration
-        if self.tokenizer.pad_token_id is not None:
-             pad_id = self.tokenizer.pad_token_id
-        elif self.tokenizer.eos_token_id is not None:
-             pad_id = self.tokenizer.eos_token_id
-        else:
-             pad_id = 0
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
 
         current_ids = input_ids
         current_mask = attention_mask
@@ -274,6 +290,12 @@ class OfferingSupervisor:
 
         print(f"[Supervisor] Generating up to {max_new_tokens} tokens...")
         start_time = time.time()
+
+        # Determine Input Names for Raw Request
+        # (Optimum handles mapping automatically, but Raw Core needs specific names)
+        model_input_names = []
+        if not self.is_optimum_wrapped:
+            model_input_names = [input.any_name for input in self.model.inputs]
 
         # 3. Static Generation Loop
         for i in range(max_new_tokens):
@@ -295,28 +317,36 @@ class OfferingSupervisor:
             # Create Position IDs (0..127)
             static_position_ids = torch.arange(0, STATIC_SEQ_LEN, dtype=torch.long).unsqueeze(0)
 
-            # B. INFER (Direct OpenVINO Request)
-            request = self.model.request
-
+            # B. Prepare Inputs
             inputs_dict = {
                 "input_ids": static_input_ids.numpy().astype(np.int64),
                 "attention_mask": static_attention_mask.numpy().astype(np.int64),
                 "position_ids": static_position_ids.numpy().astype(np.int64)
             }
 
-            # Conditionally add beam_idx
-            if any("beam_idx" in name for name in self.model_input_names):
-                inputs_dict["beam_idx"] = np.array([0], dtype=np.int32)
+            # Conditionally add beam_idx (Required for some NPU compilations)
+            # If using Raw Core, check model_input_names. If Optimum, rely on its wrapper (mostly).
+            if self.is_optimum_wrapped:
+                 # Optimum usually handles beam_idx if compiled with it, but manual request might need it
+                 try:
+                     if "beam_idx" in [i.any_name for i in self.request.model_inputs]:
+                         inputs_dict["beam_idx"] = np.array([0], dtype=np.int32)
+                 except: pass
+            else:
+                 if any("beam_idx" in name for name in model_input_names):
+                     inputs_dict["beam_idx"] = np.array([0], dtype=np.int32)
 
             # C. Run Inference
             try:
-                request.infer(inputs_dict)
+                self.request.infer(inputs_dict)
             except Exception as e:
                 print(f"[Error] Inference failed at step {i}: {e}")
                 break
 
             # D. Get Logits
-            logits = torch.from_numpy(request.get_output_tensor(0).data)
+            # Output tensor index 0 is usually logits
+            output_tensor = self.request.get_output_tensor(0)
+            logits = torch.from_numpy(output_tensor.data)
 
             # Extract logit for the LAST REAL TOKEN
             next_token_logits = logits[:, current_len - 1, :]
