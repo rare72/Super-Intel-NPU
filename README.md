@@ -7,8 +7,7 @@ A high-performance hybrid inference engine for Intel Core Ultra NPU, designed fo
 *   `src/python/`: Python Supervisor, Bake scripts, and logic.
 *   `src/cpp/`: C++ Executive for Shared Memory management.
 *   `models/`: Storage for baked OpenVINO artifacts.
-*   `scripts/`: Utility scripts for setup and release.
-*   `release_v1.0/`: **(New)** Distributable package containing the runtime.
+*   `scripts/`: Utility scripts for setup.
 
 ## Quick Start (New Offering)
 
@@ -26,12 +25,6 @@ A high-performance hybrid inference engine for Intel Core Ultra NPU, designed fo
 3.  **Run Inference:**
     ```bash
     python src/python/supervisor.py --prompt "Explain quantum computing"
-    ```
-
-4.  **Create Release Package:**
-    Bundles the application for distribution.
-    ```bash
-    ./scripts/release_package.sh
     ```
 
 ## Documentation
