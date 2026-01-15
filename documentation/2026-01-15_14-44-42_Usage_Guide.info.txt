@@ -1,0 +1,110 @@
+New Offering: Intel NPU Diagnostic & Usage Guide
+==================================================
+
+This document provides detailed usage instructions for the "New Offering" hybrid inference engine and its accompanying diagnostic toolchain. These tools are designed to prevent common Intel NPU errors (specifically -28 ENOSPC and 0x7ffffffe driver hangs) on Linux consumer kernels.
+
+Important:
+Before running any diagnostics or inference, you MUST run the bake script to download and quantize the model. The NPU cannot run the raw Hugging Face weights.
+
+Step 0: Prepare the Model (One-Time)
+--------------------------------------------------
+$ python3 src/python/bake_model.py
+*   This downloads 'Intel/neural-chat-7b-v3-1'
+*   Converts it to OpenVINO IR
+*   Compresses weights to INT4
+*   Enforces static shapes [1, 128]
+*   Saves result to './models/neuralchat_int4/'
+
+---
+
+1. The Master Launch Script (`launch.sh`)
+--------------------------------------------------
+**Purpose:** The primary entry point for the application. It automates the "Safe Launch" sequence: Hard Reset -> Cache Purge -> Vitals Check -> Pre-flight Audit -> Inference.
+
+**Usage:**
+  $ ./launch.sh
+
+**What it does:**
+1.  **Hard Reset:** Calls `scripts/npu_reset.sh` to reload the `intel_vpu` kernel module.
+2.  **Cache Purge:** Deletes `./model_cache/*` to force a clean graph compilation.
+3.  **Vitals:** Checks RAM (>6GB free required) and NPU thermal status.
+4.  **Audit:** Verifies the model is INT4 and Static ([1, 128]) using `preflight_check.py`.
+5.  **Execution:** Runs `supervisor.py` and pipes output to both the screen and logs.
+
+**Logs:**
+*   Session Log: `log/npu_history_[TIMESTAMP].log.txt` (Full verbose output)
+*   Persistent Log: `npu_history.log` (Summary of all runs, useful for tracking degradation)
+
+---
+
+2. The Emergency Reset Script (`scripts/npu_reset.sh`)
+--------------------------------------------------
+**Purpose:** Forces the Linux kernel to drop and reload the NPU driver. Use this if the NPU disappears (`ls /dev/accel/accel0` fails) or hangs indefinitely.
+
+**Usage:**
+  $ sudo bash scripts/npu_reset.sh
+
+**When to use:**
+*   After a crash or force-quit (Ctrl+C).
+*   If `launch.sh` fails at step [1/5].
+*   If `dmesg` shows "Firmware boot failed" or "Context lost".
+
+---
+
+3. The Pre-Flight Gatekeeper (`src/python/preflight_check.py`)
+--------------------------------------------------
+**Purpose:** Prevents the "15GB Allocation Error" (-28). It inspects the OpenVINO IR files *before* loading them to ensure they are properly compressed (INT4) and statically shaped.
+
+**Usage:**
+  $ python3 src/python/preflight_check.py [path_to_model.xml]
+
+**Defaults:**
+*   If no path is provided, it checks `./models/neuralchat_int4/openvino_model.xml`.
+
+**Exit Codes:**
+*   0: Success (Model is Safe).
+*   1: Failure (Model is FP16, Dynamic, or Corrupt).
+
+---
+
+4. The Vitals Monitor (`src/python/npu_vitals.py`)
+--------------------------------------------------
+**Purpose:** Checks if the host system has enough resources to run the model without crashing the driver.
+
+**Usage:**
+  $ python3 src/python/npu_vitals.py
+
+**Metrics Checked:**
+*   **System RAM:** Must have >6GB available (NPU shares system memory).
+*   **NPU Visibility:** Checks if `core.available_devices` sees "NPU".
+*   **Thermals:** Reports NPU temperature (if driver supports it).
+
+---
+
+5. Manual Inference (`src/python/supervisor.py`)
+--------------------------------------------------
+**Purpose:** The core Python runtime. In normal operations, `launch.sh` calls this. Use manually only for debugging.
+
+**Usage:**
+  $ python3 src/python/supervisor.py --model_xml ./models/neuralchat_int4/openvino_model.xml --prompt "Hello world"
+
+**Key Flags:**
+*   `--device NPU`: Forces NPU execution (default).
+*   `--max_tokens 128`: Sets generation limit (must match static shape).
+*   `--chat_style neural`: Applies the correct prompt template.
+
+---
+
+Troubleshooting Common Errors
+--------------------------------------------------
+**Error:** `ZE_RESULT_ERROR_UNKNOWN (0x7ffffffe)`
+*   **Cause:** NPU Driver desync or Turbo mode instability.
+*   **Fix:** Run `./launch.sh` (It performs a hard reset and ensures NPU_TURBO is "NO").
+
+**Error:** `ivpu_bo_alloc_vpu_addr(): Failed ... -28`
+*   **Cause:** Model is too big (FP16) or System RAM is full.
+*   **Fix:** Run `python3 src/python/preflight_check.py` to verify model size. Close web browsers to free RAM.
+
+**Error:** `to_shape was called on a dynamic shape`
+*   **Cause:** Model was not baked with static shapes.
+*   **Fix:** Re-run `bake_model.py` to regenerate the static [1, 128] binaries.
