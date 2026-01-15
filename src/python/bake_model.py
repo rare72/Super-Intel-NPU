@@ -111,15 +111,6 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             partial_shape = input_node.get_partial_shape()
             logger.info(f"    > Found Input: {name}, Shape: {partial_shape}, Type: {input_node.get_element_type()}")
 
-            # --- TYPE REMEDIATION ---
-            # Intel NPU driver often panics (0x7ffffffe) with Int64 inputs.
-            # We aggressively change input precision to I32 for stability.
-            if input_node.get_element_type() == ov.Type.i64:
-                logger.info(f"      -> Remediation: Changing Input {name} precision from I64 to I32 for NPU stability.")
-                # We modify the parameter node itself in the graph
-                input_node.get_node().set_element_type(ov.Type.i32)
-                input_node.get_node().set_output_type(0, ov.Type.i32, partial_shape)
-
             # --- SHAPE REMEDIATION ---
             # 1. Handle beam_idx (if present)
             if "beam_idx" in name:
