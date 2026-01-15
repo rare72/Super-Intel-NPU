@@ -1,0 +1,103 @@
+Process Verification and Troubleshooting Guide
+=============================================
+Timestamp: 2026-01-14 19:45:00
+Task Name: Fix NPU Config Loading and Clarify Process
+
+Summary of Changes
+------------------
+1.  **Process Clarification**: Detailed "Bake vs. No Bake" decision tree for the "New Offering".
+2.  **NPU Driver Verification**: Added commands to check Level Zero and NPU kernel status.
+3.  **Critical Fix (`bake_model.py`)**: The baking script was saving the OpenVINO graph (`.xml`) but failing to copy the critical Hugging Face configuration files (`config.json`, etc.) to the final output. This caused `supervisor.py` to crash with "library name could not be automatically inferred". This is now fixed.
+
+Detailed Implementation Notes
+-----------------------------
+
+### 1. The "Library Name" Error Fix
+The error you encountered:
+`[Error] Unexpected ValueError during load: The library name could not be automatically inferred.`
+
+**Cause:**
+`optimum.intel` requires metadata files (specifically `config.json`) to know how to load the model architecture. The previous version of `bake_model.py` only saved the raw OpenVINO graph.
+
+**Fix:**
+Updated `src/python/bake_model.py` to explicitly copy all `.json` and `.model` files from the intermediate processing directory to the final `output_dir` before cleanup.
+
+**Action Required:**
+You MUST **re-run the bake script** one last time to generate a valid model folder that `supervisor.py` can load without errors.
+Command:
+```bash
+python src/python/bake_model.py \
+  --model_id Intel/neural-chat-7b-v3-1 \
+  --output_dir ./models/neuralchat_int4
+```
+
+### 2. Process Guide: Do I need to Bake?
+
+**Answer: YES.**
+
+For the "New Offering" targeting the **Intel NPU**, baking is mandatory to achieve the high-performance, low-power state required.
+
+**The "Bake" (src/python/bake_model.py) performs three critical actions that standard downloads do not:**
+1.  **INT4 Quantization:** Compresses the 28GB model down to ~5GB so it fits in RAM alongside the OS.
+2.  **Static Reshaping:** Locks the input dimensions to `[1, 128]` (or your config). This prevents the "Dynamic Shape" driver crashes common on consumer NPUs.
+3.  **Graph Optimization:** Fuses nodes specifically for the NPU architecture.
+
+**Step-by-Step Workflow:**
+1.  **Bake the Model (One-Time):**
+    `python src/python/bake_model.py ...`
+    *Result:* A folder `./models/neuralchat_int4` containing `.xml`, `.bin`, and `.json` files.
+2.  **Run Supervisor (Every Time):**
+    `python src/python/supervisor.py --model_xml ./models/neuralchat_int4 ...`
+    *Result:* The Supervisor loads the baked files, verifies the NPU, and starts the inference loop.
+
+### 3. NPU Driver Verification
+
+To verify you have the newest drivers that *might* support dynamic shapes (allowing you to skip strict baking in the future), follow these steps:
+
+**Step A: Check Kernel Level**
+Newer Intel NPU support requires Linux Kernel 6.8 or newer.
+```bash
+uname -r
+# Expected Output: > 6.8.0-xx-generic
+```
+
+**Step B: Check Level Zero Loader**
+The `ze_loader` is the bridge to the hardware.
+```bash
+dpkg -l | grep level-zero
+# Look for: intel-level-zero-npu
+```
+
+**Step C: Verify NPU Visibility via Python**
+Run this one-liner to see if OpenVINO can talk to the NPU:
+```bash
+python3 -c "import openvino as ov; core = ov.Core(); print(core.available_devices)"
+# Expected Output: ['CPU', 'GPU', 'NPU']
+```
+*If 'NPU' is missing, ensure your user is in the `render` group: `sudo usermod -aG render $USER` and reboot.*
+
+**Step D: Check NPU Driver Capabilities (Advanced)**
+If you have `clinfo` installed:
+```bash
+clinfo | grep "Intel(R) AI Boost"
+```
+
+Fixes & Caveats
+---------------
+*   **Resolved:** `supervisor.py` falling back to CPU or crashing because `config.json` was missing.
+*   **Caveat:** The "Static Loop" in Supervisor relies on `bake_model.py` enforcing strict shapes. If you try to run a generic model downloaded from Hugging Face without baking, it may crash the NPU driver due to dynamic resizing unless your drivers are bleeding-edge (2025.x+).
+
+Usage Instructions
+------------------
+**1. Re-Bake the Model (Apply the Fix):**
+```bash
+python src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1 --output_dir ./models/neuralchat_int4 --config src/python/nncf_config.json
+```
+
+**2. Run Inference:**
+```bash
+python src/python/supervisor.py \
+    --model_xml ./models/neuralchat_int4 \
+    --tokenizer_id Intel/neural-chat-7b-v3-1 \
+    --prompt "List the planets."
+```

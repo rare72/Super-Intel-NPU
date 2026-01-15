@@ -149,6 +149,16 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         logger.info(f">>> [Bake] Serializing Final Static IR to {output_dir}...")
         ov.save_model(ov_model, final_xml_path)
 
+        # Copy Config Files from Intermediate to Final
+        # OpenVINO save_model only saves .xml and .bin. We need the JSON configs for Optimum to load it later.
+        logger.info(">>> [Bake] Migrating config files to final output...")
+        for filename in os.listdir(intermediate_dir):
+            if filename.endswith(".json") or filename.endswith(".model"):
+                src_file = os.path.join(intermediate_dir, filename)
+                dst_file = os.path.join(output_dir, filename)
+                shutil.copy2(src_file, dst_file)
+                logger.debug(f"    > Copied {filename}")
+
         # Cleanup Intermediate
         logger.info(">>> [Bake] Removing intermediate files...")
         shutil.rmtree(intermediate_dir, ignore_errors=True)

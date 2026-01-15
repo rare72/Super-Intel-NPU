@@ -33,27 +33,50 @@ The system consists of two main components:
 
 ## Usage
 
-### 1. Bake the Model (One-Time Setup)
-Before running inference, you must "bake" the model. This downloads the weights, converts them to OpenVINO IR, compresses them to INT4, and enforces strict static shapes for NPU compatibility.
+### 1. Bake the Model (Mandatory One-Time Setup)
+For the "New Offering" targeting the Intel NPU, you **must** bake the model. Standard Hugging Face downloads will likely fail on the NPU due to dynamic shape drivers issues.
+
+The Bake process:
+1.  **Downloads** the open weights.
+2.  **Compresses** weights to INT4 (fitting 28GB models into ~5GB RAM).
+3.  **Reshapes** the graph to strict static inputs (preventing driver crashes).
+4.  **Packages** the necessary config files for the Supervisor.
 
 ```bash
-python3 src/python/bake_model.py --model_id Intel/neural-chat-7b-v3-1
+# Example: Bake Neural Chat to a local folder
+python3 src/python/bake_model.py \
+    --model_id Intel/neural-chat-7b-v3-1 \
+    --output_dir ./models/neuralchat_int4
 ```
-*   **Output:** Optimized model binaries in `./offering_int4_binary` (or specified output).
+*   **Output:** Optimized model binaries (`.xml`, `.bin`) and configuration files (`.json`) in the output directory.
 *   **Note:** This process takes several minutes. Ensure you have ~30GB of free space for the conversion.
 
 ### 2. Run Inference
-Launch the Supervisor to start the interactive inference session.
+Launch the Supervisor pointing to your **baked** model directory.
 
 ```bash
-python3 src/python/supervisor.py
+python3 src/python/supervisor.py \
+    --model_xml ./models/neuralchat_int4 \
+    --tokenizer_id Intel/neural-chat-7b-v3-1 \
+    --prompt "Explain quantum computing."
 ```
+*   **Flags:**
+    *   `--model_xml`: Path to the baked model directory (or the .xml file inside it).
+    *   `--device`: Target device (default: `NPU`).
+    *   `--chat_style`: Template format (`neural`, `llama3`, or `raw`).
 
 ## Troubleshooting
 
-*   **Bus Error / Segmentation Fault:** Often caused by dynamic shapes on the NPU. Ensure you re-run `bake_model.py` if you change model configurations.
-*   **"Node beam_idx is still dynamic":** Fixed in `bake_model.py` by enforcing `[1]` static shape.
-*   **Permissions:** Ensure your user is in the `render` group (`sudo usermod -a -G render $USER`) and re-login.
+*   **"The library name could not be automatically inferred":**
+    *   **Cause:** The model directory contains OpenVINO files (`.xml`) but is missing the Hugging Face `config.json`.
+    *   **Fix:** Re-run `bake_model.py` (updated Jan 14, 2026) which now correctly copies these files to the output folder.
+*   **Bus Error / Segmentation Fault:**
+    *   **Cause:** Dynamic shapes on older NPU drivers.
+    *   **Fix:** Ensure you are using a baked model with strict static shapes (`--use_cache=False` in `bake_model.py`).
+*   **"Node beam_idx is still dynamic":**
+    *   **Fix:** Fixed in `bake_model.py` by enforcing `[1]` static shape.
+*   **NPU Not Found:**
+    *   **Fix:** Ensure your user is in the `render` group (`sudo usermod -a -G render $USER`) and you have installed `intel-level-zero-npu`. Verify with `python3 -c "import openvino as ov; print(ov.Core().available_devices)"`.
 
 ## Directory Structure
 *   `src/python/`: Python source code (Baker, Supervisor).
