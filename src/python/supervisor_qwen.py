@@ -21,11 +21,17 @@ class QwenSupervisor:
 
     def load(self):
         print(f"[Qwen] Loading Tokenizer from {self.model_path}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+        try:
+            # Attempt to fix the specific Mistral-regex warning if supported
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True, fix_mistral_regex=True)
+        except TypeError:
+            # Fallback for versions/classes that don't support the flag
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = "<|endoftext|>"
 
-        print(f"[Qwen] Loading Model to {self.device}...")
+        print(f"[Qwen] Loading Model to {self.device} (This may take 2-5 mins for NPU Compilation)...")
         core = ov.Core()
         core.set_property({"CACHE_DIR": "./model_cache_qwen"})
         if self.device == "NPU":
@@ -38,6 +44,18 @@ class QwenSupervisor:
         for i in model.inputs:
             self.input_map[i.any_name] = i.element_type
             print(f"  > Input: {i.any_name} ({i.element_type})")
+
+        # Warmup
+        print("[Qwen] Warming up NPU (Stabilizing Driver)...")
+        dummy_input = {
+            "input_ids": np.full((1, STATIC_SEQ_LEN), self.tokenizer.pad_token_id, dtype=np.int64),
+            "attention_mask": np.zeros((1, STATIC_SEQ_LEN), dtype=np.int64)
+        }
+        if "position_ids" in self.input_map:
+             dummy_input["position_ids"] = np.arange(0, STATIC_SEQ_LEN, dtype=np.int64).reshape(1, -1)
+
+        self.request.infer(dummy_input)
+        print("[Qwen] Warmup Complete.")
 
     def infer(self, prompt):
         print("-" * 40)
