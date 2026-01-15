@@ -60,15 +60,29 @@ class OfferingSupervisor:
             pass
 
     def load_tokenizer(self):
-        if self.tokenizer_id:
-            print(f"[Supervisor] Loading Tokenizer: {self.tokenizer_id}...")
+        # SMART DEFAULT: If tokenizer_id is not explicit, look in the baked model folder.
+        target_path = self.tokenizer_id
+
+        if not target_path and self.model_xml:
+            # Fallback to model directory
+            potential_dir = os.path.dirname(self.model_xml) if os.path.isfile(self.model_xml) else self.model_xml
+            if os.path.exists(os.path.join(potential_dir, "tokenizer_config.json")):
+                print(f"[Supervisor] Auto-detected tokenizer in baked model directory: {potential_dir}")
+                target_path = potential_dir
+            else:
+                 print(f"[Supervisor] Warning: No tokenizer_id provided and none found in {potential_dir}.")
+
+        if target_path:
+            print(f"[Supervisor] Loading Tokenizer from: {target_path}...")
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_id)
+                self.tokenizer = AutoTokenizer.from_pretrained(target_path)
                 # Padding is critical for static shapes
                 if self.tokenizer.pad_token is None:
                     self.tokenizer.pad_token = self.tokenizer.eos_token
             except Exception as e:
                 print(f"[Error] Failed to load tokenizer: {e}")
+        else:
+            print("[Error] No tokenizer available. Prompt formatting will fail.")
 
     def load_inference_engine(self):
         print(f"\n[Supervisor] Loading Inference Engine on {self.device}...")
@@ -97,7 +111,7 @@ class OfferingSupervisor:
                 # Enable caching for speed
                 core.set_property({"CACHE_DIR": "./model_cache"})
 
-                print(f"[Supervisor] Compiling model from {model_path}...")
+                print(f"[Supervisor] Loading model to NPU (Checking Driver Cache / Compiling)...")
                 self.model = core.compile_model(model_path, "NPU")
                 self.request = self.model.create_infer_request()
                 self.is_optimum_wrapped = False
@@ -423,7 +437,7 @@ class OfferingSupervisor:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="New Offering Supervisor")
     parser.add_argument("--model_xml", type=str, default=None, help="Path to OpenVINO XML model or Directory")
-    parser.add_argument("--tokenizer_id", type=str, default=None, help="Tokenizer ID")
+    parser.add_argument("--tokenizer_id", type=str, default=None, help="Tokenizer ID (Optional if baked)")
     parser.add_argument("--device", type=str, default="NPU", help="Target Device (NPU, GPU, CPU)")
     parser.add_argument("--shm_name", type=str, default=DEFAULT_SHM_NAME, help="Shared Memory Name")
 

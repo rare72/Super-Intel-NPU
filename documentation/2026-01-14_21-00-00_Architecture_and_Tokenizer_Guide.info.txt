@@ -1,0 +1,48 @@
+[2026-01-14_21-00-00]_Architecture_and_Tokenizer_Guide.info.txt
+
+1. Architecture Concept: Baking vs. Runtime Compilation
+   ----------------------------------------------------
+   One of the most common points of confusion in OpenVINO deployment is the difference between "Baking" and "Compiling".
+
+   A. The Bake Process (Done ONCE via bake_model.py)
+      - **Input:** Huge PyTorch weights (e.g., 16GB FP16).
+      - **Action:** Conversion, NNCF Quantization (INT4), and Static Reshaping.
+      - **Output:** An "Intermediate Representation" (IR). This consists of `.xml` and `.bin` files.
+      - **Why?** This step makes the model "Hardware Agnostic" but optimized. You can move these files to *any* Intel machine.
+
+   B. The Runtime Compilation (Done ONCE per Boot via supervisor.py)
+      - **Input:** The Baked IR (.xml).
+      - **Action:** The Intel NPU Driver (Level Zero) translates the generic IR into specific micro-code instructions for your exact silicon (e.g., NPU 3720 vs NPU 4000).
+      - **Output:** A Binary Blob in memory (or cached on disk).
+      - **Why?** The NPU is a specialized accelerator. It cannot read generic XML; it needs raw machine code.
+
+   **Key Takeaway:**
+   When the Supervisor says "Loading model to NPU...", it is performing Step B.
+   - **First Run:** Slow (~1-2 mins) as it builds the blob.
+   - **Subsequent Runs:** Fast (<5 sec) as it loads the blob from `./model_cache`.
+
+2. Tokenizer Best Practices: The "Smart Default"
+   ----------------------------------------------------
+   Using the correct tokenizer is critical for model accuracy.
+
+   - **Old Risk:** Using `--tokenizer_id Intel/neural-chat...` forces the script to connect to Hugging Face and download the generic tokenizer. This requires internet and might version-drift from your baked model.
+
+   - **New Strategy:** The Supervisor now supports "Smart Defaults".
+     If you baked your model correctly, the tokenizer files (`tokenizer.json`, etc.) are already inside your `./models/neuralchat_int4` folder.
+
+   - **Recommended Command:**
+     `python src/python/supervisor.py --model_xml ./models/neuralchat_int4`
+
+     (Note: You do NOT need to provide `--tokenizer_id` anymore. The script will automatically find it in the model folder.)
+
+   - **Benefits:**
+     1. **Offline Ready:** Runs without internet.
+     2. **Version Locked:** Ensures the tokenizer matches exactly what was used during baking.
+
+3. Troubleshooting
+   ----------------------------------------------------
+   - **Issue:** "Library name not found" error.
+     - **Fix:** Re-run `bake_model.py`. The updated script ensures `config.json` and `tokenizer_config.json` are properly copied to the output folder.
+
+   - **Issue:** Supervisor says "Compiling" every time.
+     - **Fix:** Ensure `CACHE_DIR` is writable. The script is designed to check the cache first. If the driver updates or the model changes, a re-compile is normal.
