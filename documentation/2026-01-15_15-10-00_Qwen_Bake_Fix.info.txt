@@ -1,0 +1,32 @@
+Task: Fix Qwen3 Baking Error (ValidationError: Ignored nodes not found)
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/bake_qwen.py` to resolve a `nncf.errors.ValidationError` during the model quantization phase.
+
+Detailed Implementation Notes:
+1.  **Issue Identification**:
+    *   The previous configuration for Qwen3 quantization included an `ignored_scope` targeting `["MVN", "Normalize", "ReduceMean"]`.
+    *   NNCF (Neural Network Compression Framework) enforces strict validation of these scopes.
+    *   Qwen3 (patched as Qwen2) uses RMSNorm layers which did not match the types `MVN` or `Normalize` in the OpenVINO trace.
+    *   This caused NNCF to crash with `Ignored nodes that matches types ['MVN', 'Normalize'] were not found in the NNCFGraph`.
+
+2.  **Fix Implementation**:
+    *   Updated `quantization_config` in `src/python/bake_qwen.py`.
+    *   Changed `"ignored_scope": {"types": ["MVN", "Normalize", "ReduceMean"]}` to `"ignored_scope": {"types": []}`.
+    *   This instructs NNCF to perform quantization on all layers (except default exclusions) without crashing due to missing "ignored" types.
+
+Usage Instructions:
+No change to usage. Continue to use the standard command:
+`python3 src/python/bake_qwen.py`
+
+Fixes & Caveats:
+*   **Fix**: Resolves the fatal `ValidationError` preventing the Qwen3 model from compiling.
+*   **Caveat**: By clearing the ignored scope, NNCF will attempt to quantize normalization layers if they are not excluded by default. Given Qwen's architecture, this is generally acceptable for INT4 weight-only quantization, but accuracy should be monitored.
+
+Technical Metrics:
+*   **Target Model**: mlabonne/Qwen3-8B-abliterated (Patched as Qwen2)
+*   **Quantization**: INT4 (Asymmetric)
+*   **Ignored Scope**: Empty (Validation strictness bypassed)
