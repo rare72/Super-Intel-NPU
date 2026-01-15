@@ -1,0 +1,35 @@
+Task: Fix Qwen3 Runtime Warning and Add NPU Warmup
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen.py` to address a specific tokenizer warning related to regex patterns and to improve the robustness of the NPU launch sequence.
+
+Detailed Implementation Notes:
+1.  **Tokenizer Warning Fix**:
+    *   The `mlabonne/Qwen3-8B-abliterated` tokenizer triggers a specific `transformers` warning: "The tokenizer you are loading ... with an incorrect regex pattern ... You should set the `fix_mistral_regex=True` flag".
+    *   Updated the `load()` method to attempt loading the tokenizer with `fix_mistral_regex=True`.
+    *   Wrapped this in a `try-except TypeError` block to ensure compatibility if the underlying tokenizer class does not accept this argument (fallback mechanism).
+
+2.  **User Expectations (compilation Delay)**:
+    *   Updated the console output during model loading to explicitly state: `(This may take 2-5 mins for NPU Compilation)...`.
+    *   This prevents users from interpreting the long compilation pause as a "hang" or error.
+
+3.  **NPU Warmup Sequence**:
+    *   Added a `Warmup` phase immediately after model compilation.
+    *   Sends a dummy request (Input IDs filled with Pad Token, Attention Mask of zeros) to the NPU.
+    *   **Purpose**: This initializes the Level Zero driver's command queues and ensures the NPU is in an active power state before the first real user query is processed. This significantly reduces the chance of timeouts on the first inference.
+
+Usage Instructions:
+No change to usage. Continue to use the standard launch script:
+`./launch_qwen.sh`
+
+Fixes & Caveats:
+*   **Fix**: Suppresses/Resolves the "incorrect regex pattern" warning.
+*   **Fix**: Clarifies the compilation delay.
+*   **Fix**: Stabilizes first-token latency via warmup.
+
+Technical Metrics:
+*   **Warmup Tensor**: `[1, 4096]` Int64 (Pad Tokens).
+*   **Device**: NPU (Intel Core Ultra).
