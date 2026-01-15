@@ -1,0 +1,37 @@
+New Offering: Qwen3-8B Integration
+====================================
+
+This document outlines the specialized workflow for the `mlabonne/Qwen3-8B-abliterated` model.
+
+1. Components
+-------------
+*   `src/python/download_qwen.py`: Pulls the raw weights.
+*   `src/python/bake_qwen.py`: Quantizes to INT4 and reshapes to [1, 4096]. Note: It automatically patches "qwen3" to "qwen2" in config.json to ensure OpenVINO compatibility.
+*   `src/python/supervisor_qwen.py`: Specialized inference loop that handles the 4096 context window and preserves <think> tags.
+*   `launch_qwen.sh`: The master orchestration script.
+
+2. Usage
+--------
+Step 1: Download
+$ python3 src/python/download_qwen.py
+
+Step 2: Bake (Long Process - run once)
+$ python3 src/python/bake_qwen.py
+(This will create `./models/qwen3_int4/`)
+
+Step 3: Launch
+$ ./launch_qwen.sh
+
+3. Thinking Mode
+----------------
+The supervisor injects a system prompt: "You must always think before you speak...". The output will stream raw tokens, so you will see:
+<think>
+... reasoning process ...
+</think>
+Final Answer...
+
+4. Technical Specs
+------------------
+*   Static Shape: [1, 4096]
+*   Precision: INT4 (NNCF)
+*   Format: OpenVINO IR (Patched as Qwen2)
