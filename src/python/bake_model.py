@@ -184,6 +184,15 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         verify_model = core.read_model(final_xml_path)
         success = True
 
+        # Check size (INT4 verification)
+        bin_size = os.path.getsize(final_bin_path) / (1024**3)
+        logger.info(f"    > [Verify Size] .bin size: {bin_size:.2f} GB")
+        if bin_size > 6.0:
+            logger.error("!! CRITICAL: Model size > 6GB. Compression likely failed. Do NOT load on NPU.")
+            success = False
+        else:
+            logger.info("    > [Verify Size] Size check passed (INT4 range).")
+
         for input_node in verify_model.inputs:
             ps = input_node.get_partial_shape()
             pt = input_node.get_element_type()
@@ -199,7 +208,7 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
                 # We don't fail here, but we warn heavily.
 
         if not success:
-            logger.critical(">>> [Bake] FATAL: Failed to make model fully static.")
+            logger.critical(">>> [Bake] FATAL: Verification failed.")
             sys.exit(1)
 
         logger.info(f">>> [Bake] Success! Optimized NPU-ready model is at {output_dir}")
