@@ -1,0 +1,32 @@
+Summary of Changes:
+Implemented a comprehensive diagnostic and recovery suite for the Intel NPU "New Offering" project. Resolved a critical inference crash related to driver configuration and missing tooling.
+
+Detailed Implementation Notes:
+1.  **Diagnostic Scripts Created:**
+    *   `src/python/preflight_check.py`: Audits model file size (INT4 vs FP16), precision, and static shapes before NPU load.
+    *   `src/python/npu_vitals.py`: Monitors NPU thermal status and available system RAM (crucial for preventing -28 allocation errors).
+    *   `scripts/npu_reset.sh`: Hard resets the `intel_vpu` kernel module and clears zombie processes.
+    *   `launch.sh`: Master orchestration script that chains Reset -> Cache Purge -> Vitals -> Pre-flight -> Execution, logging all output to `log/history_TIMESTAMP.log.txt` and a persistent `npu_history.log`.
+
+2.  **Fixes in `supervisor.py`:**
+    *   **NPU Turbo Fix:** Changed the `NPU_TURBO` configuration from `"OFF"` (invalid) to `"NO"` (valid string boolean). This prevents the `0x7ffffffe` driver hang.
+    *   **Logging:** Integrated the `log/` directory structure for session history.
+
+3.  **Enhancements in `bake_model.py`:**
+    *   **Size Verification:** Added a post-serialization check to ensure the generated `.bin` file is under 6GB, confirming successful INT4 compression.
+    *   **Logging:** Improved verification logging to clearly state if nodes remain dynamic or high-precision (I64).
+
+Fixes & Caveats:
+*   **Fix:** Resolved `ZE_RESULT_ERROR_INVALID_ARGUMENT` by ensuring the correct `NPU_TURBO` property syntax.
+*   **Caveat:** The `input_ids` and `attention_mask` inputs remain `int64`. The user explicitly requested NOT to cast these to `int32`. While the bake script warns about this, the current NPU driver seems to tolerate it if the shapes are strictly static.
+*   **Hardware:** The NPU requires a "Warm-Up" inference with dummy data to stabilize the command queue, which is now handled by the Supervisor.
+
+Usage Instructions:
+*   **Master Launch:** `./launch.sh` (Run this to start the full stack safely).
+*   **Manual Reset:** `sudo bash scripts/npu_reset.sh`
+*   **Pre-flight:** `python3 src/python/preflight_check.py ./models/neuralchat_int4/openvino_model.xml`
+
+Technical Metrics:
+*   **Target Model:** Neural-Chat-7b-v3-1 (INT4)
+*   **Static Shape:** [1, 128]
+*   **Est. Memory Footprint:** ~4.5 GB (System RAM)

@@ -122,7 +122,11 @@ class OfferingSupervisor:
                 core.set_property({"CACHE_DIR": "./model_cache"})
                 # DISABLE NPU TURBO to prevent 0x7ffffffe (ZE_RESULT_ERROR_UNKNOWN)
                 # This stabilizes the Level Zero driver on Linux kernels
-                core.set_property("NPU", {"NPU_TURBO": "OFF"})
+                # Updated to use "NO" string boolean which is safer for property parsing
+                try:
+                    core.set_property("NPU", {"NPU_TURBO": "NO"})
+                except Exception as e:
+                    print(f"[Supervisor] Warning: Failed to set NPU_TURBO: {e}")
 
                 print(f"[Supervisor] Loading model to NPU (Checking Driver Cache / Compiling)...")
                 self.model = core.compile_model(model_path, "NPU")
@@ -514,6 +518,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default=None, help="Single-shot prompt to run")
     parser.add_argument("--system_message", type=str, default=None, help="System message/Persona")
     parser.add_argument("--chat_style", type=str, choices=["neural", "llama3", "raw"], default="neural", help="Chat template style")
+    parser.add_argument("--max_tokens", type=int, default=128, help="Max tokens (not strictly used in static loop but good for compat)")
 
     args = parser.parse_args()
 
