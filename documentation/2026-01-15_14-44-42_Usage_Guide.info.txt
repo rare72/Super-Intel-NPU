@@ -3,6 +3,20 @@ New Offering: Intel NPU Diagnostic & Usage Guide
 
 This document provides detailed usage instructions for the "New Offering" hybrid inference engine and its accompanying diagnostic toolchain. These tools are designed to prevent common Intel NPU errors (specifically -28 ENOSPC and 0x7ffffffe driver hangs) on Linux consumer kernels.
 
+Important:
+Before running any diagnostics or inference, you MUST run the bake script to download and quantize the model. The NPU cannot run the raw Hugging Face weights.
+
+Step 0: Prepare the Model (One-Time)
+--------------------------------------------------
+$ python3 src/python/bake_model.py
+*   This downloads 'Intel/neural-chat-7b-v3-1'
+*   Converts it to OpenVINO IR
+*   Compresses weights to INT4
+*   Enforces static shapes [1, 128]
+*   Saves result to './models/neuralchat_int4/'
+
+---
+
 1. The Master Launch Script (`launch.sh`)
 --------------------------------------------------
 **Purpose:** The primary entry point for the application. It automates the "Safe Launch" sequence: Hard Reset -> Cache Purge -> Vitals Check -> Pre-flight Audit -> Inference.
