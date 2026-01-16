@@ -23,9 +23,10 @@ logging.basicConfig(
 logger = logging.getLogger("QwenSupervisor")
 
 class QwenSupervisor:
-    def __init__(self, model_path, device="NPU"):
+    def __init__(self, model_path, device="NPU", turbo=False):
         self.model_path = model_path
         self.device = device
+        self.turbo = turbo
         self.tokenizer = None
         self.request = None
         self.input_map = {}
@@ -50,11 +51,21 @@ class QwenSupervisor:
             pass
 
         xml_path = os.path.join(self.model_path, "openvino_model.xml")
-        if os.path.exists(xml_path):
-            size_mb = os.path.getsize(xml_path) / (1024*1024)
-            logger.info(f"Model file found: {xml_path} ({size_mb:.2f} MB)")
+        bin_path = os.path.join(self.model_path, "openvino_model.bin")
+
+        if os.path.exists(xml_path) and os.path.exists(bin_path):
+            xml_mb = os.path.getsize(xml_path) / (1024*1024)
+            bin_gb = os.path.getsize(bin_path) / (1024**3)
+            logger.info(f"Model files found: XML={xml_mb:.2f}MB, BIN={bin_gb:.2f}GB")
+
+            # CRITICAL INTEGRITY CHECK
+            if bin_gb < 2.0:
+                logger.error(f"CRITICAL: Model binary is too small ({bin_gb:.2f} GB). Expected > 4.0 GB.")
+                logger.error("The model graph was likely truncated during export.")
+                logger.error("SOLUTION: Please delete the model directory and re-run 'bake_qwen.py'.")
+                sys.exit(1)
         else:
-            logger.error(f"CRITICAL: Model file not found at {xml_path}")
+            logger.error(f"CRITICAL: Model files not found at {self.model_path}")
             sys.exit(1)
 
         logger.info(f"Loading Model to {self.device} (This may take 5-15 mins for NPU Compilation)...")
@@ -68,7 +79,9 @@ class QwenSupervisor:
             core.set_property({"LOG_LEVEL": "LOG_INFO"})
             if self.device == "NPU":
                 core.set_property("NPU", {"LOG_LEVEL": "LOG_DEBUG"})
-                core.set_property("NPU", {"NPU_TURBO": "NO"})
+                turbo_val = "YES" if self.turbo else "NO"
+                logger.info(f"Setting NPU_TURBO={turbo_val}")
+                core.set_property("NPU", {"NPU_TURBO": turbo_val})
         except Exception as e:
             logger.warning(f"Could not set log properties: {e}")
 
@@ -172,8 +185,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", default="./models/qwen3_int4")
     parser.add_argument("--prompt", default="Why is the sky blue?")
+    parser.add_argument("--npu_turbo", action="store_true", help="Enable NPU Turbo Mode (Experimental)")
     args = parser.parse_args()
 
-    sup = QwenSupervisor(args.model_dir)
+    sup = QwenSupervisor(args.model_dir, turbo=args.npu_turbo)
     sup.load()
     sup.infer(args.prompt)
