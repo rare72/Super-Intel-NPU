@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("SupervisorQwenInt8")
 
 class QwenInt8Supervisor:
-    def __init__(self, model_path, device="GPU"):
+    def __init__(self, model_path, device="NPU"):
         self.model_path = model_path
         self.device = device
         self.tokenizer = None
@@ -28,29 +28,43 @@ class QwenInt8Supervisor:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = "<|endoftext|>"
 
-        logger.info(f"Loading Dynamic INT8 Model to {self.device}...")
-
-        # Configure OV Config for dynamic shapes
-        # CACHE_DIR helps compiled blob reuse
-        ov_config = {"CACHE_DIR": "./model_cache_qwen_int8"}
-
-        # For NPU specifically, we might need to be careful with dynamic shapes
+        # Fallback Order Logic
+        # If user requests NPU, try NPU -> GPU -> CPU
+        devices_to_try = [self.device]
         if self.device == "NPU":
-            logger.warning("WARNING: Running Dynamic Shapes on NPU. This may cause driver hangs/crashes.")
-            ov_config["NPU_TURBO"] = "NO"
+            if "GPU" not in devices_to_try: devices_to_try.append("GPU")
+            if "CPU" not in devices_to_try: devices_to_try.append("CPU")
 
-        try:
-            self.model = OVModelForCausalLM.from_pretrained(
-                self.model_path,
-                device=self.device,
-                ov_config=ov_config,
-                trust_remote_code=True
-            )
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            sys.exit(1)
+        logger.info(f"Loading Dynamic INT8 Model. Attempt Order: {devices_to_try}")
 
-        logger.info("Model loaded successfully.")
+        for dev in devices_to_try:
+            logger.info(f"Attempting load on: {dev}")
+
+            # Configure OV Config for dynamic shapes
+            ov_config = {"CACHE_DIR": "./model_cache_qwen_int8"}
+
+            # For NPU specifically, we might need to be careful with dynamic shapes
+            if dev == "NPU":
+                logger.warning("WARNING: Running Dynamic Shapes on NPU. This may cause driver hangs/crashes.")
+                ov_config["NPU_TURBO"] = "NO"
+
+            try:
+                self.model = OVModelForCausalLM.from_pretrained(
+                    self.model_path,
+                    device=dev,
+                    ov_config=ov_config,
+                    trust_remote_code=True
+                )
+                self.device = dev # Update to actual successful device
+                logger.info(f"Model loaded successfully on {dev}.")
+                return # Success
+            except Exception as e:
+                logger.error(f"Failed to load model on {dev}: {e}")
+                if dev == devices_to_try[-1]:
+                    logger.critical("All device attempts failed. Exiting.")
+                    sys.exit(1)
+                else:
+                    logger.info("Retrying with next device in fallback chain...")
 
     def generate(self, prompt, max_new_tokens=100):
         logger.info(f"Prompt: {prompt}")
@@ -93,7 +107,7 @@ class QwenInt8Supervisor:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", default="./models/pv1-qwen3_int8")
-    parser.add_argument("--device", default="GPU", help="Device to run on (GPU, CPU, NPU)")
+    parser.add_argument("--device", default="NPU", help="Device to run on (GPU, CPU, NPU)")
     parser.add_argument("--prompt", default="Explain quantum entanglement briefly.")
     args = parser.parse_args()
 

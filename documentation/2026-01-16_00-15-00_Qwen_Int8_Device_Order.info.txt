@@ -1,0 +1,32 @@
+Task: Update Qwen3 INT8 Supervisor Default Device and Fallback
+Date: 2026-01-16
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen_int8.py` to prioritize NPU execution as the default behavior, with automatic fallback to GPU and then CPU if loading fails.
+
+Detailed Implementation Notes:
+1.  **Default Device Change**:
+    *   Updated the `__init__` method and `argparse` default value from `"GPU"` to `"NPU"`.
+    *   This sets the NPU as the primary target for the INT8 dynamic model experiment.
+
+2.  **Fallback Logic**:
+    *   Implemented a retry loop in the `load()` method.
+    *   If the requested device is `"NPU"`, the supervisor constructs a fallback chain: `["NPU", "GPU", "CPU"]`.
+    *   It attempts to load the model on each device sequentially.
+    *   Logs errors for failed attempts and proceeds to the next device.
+    *   Exits with a critical error only if all devices in the chain fail.
+
+Usage Instructions:
+Standard Run (Defaults to NPU -> GPU -> CPU):
+`python3 src/python/supervisor_qwen_int8.py`
+
+Explicit Override (No fallback if specified):
+`python3 src/python/supervisor_qwen_int8.py --device GPU`
+
+Fixes & Caveats:
+*   **Fix**: Aligns default behavior with user preference for NPU priority.
+*   **Caveat**: Dynamic shapes on NPU are still experimental; the fallback logic ensures the script remains usable even if the NPU driver rejects the dynamic model.
+
+Technical Metrics:
+*   **Default Priority**: NPU > GPU > CPU.
