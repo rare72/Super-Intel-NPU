@@ -1,0 +1,33 @@
+Task: Enable Verbose Logging and Diagnostics for Qwen3 Supervisor
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen.py` to enable granular logging and system diagnostics. This addresses user reports of silent "crashes" or hangs during the lengthy NPU compilation phase.
+
+Detailed Implementation Notes:
+1.  **Logging Infrastructure**:
+    *   Replaced standard `print()` statements with the python `logging` module.
+    *   Configured logging to output to `sys.stdout` with timestamps (`%(asctime)s`).
+    *   Added `sys.stdout.flush()` calls before critical blocking operations (like `compile_model`) to ensure the user interface updates immediately, even if buffering is active.
+
+2.  **OpenVINO Verbosity**:
+    *   Enabled internal OpenVINO logs via `core.set_property({"LOG_LEVEL": "LOG_INFO"})`.
+    *   Specifically targeted the NPU plugin with `core.set_property("NPU", {"LOG_LEVEL": "LOG_DEBUG"})`. This will stream detailed driver events (compilation progress, memory allocation) to the console, helping distinguish between a "hang" and "work in progress".
+
+3.  **System Diagnostics**:
+    *   Added a call to `free -h` via `subprocess` immediately before model loading. This logs the available RAM/Swap, helping diagnose if the OOM (Out of Memory) killer is terminating the process during the compilation spike.
+    *   Added a file existence check for `openvino_model.xml` along with its file size logging. This confirms the bake was successful before attempting to load.
+
+Usage Instructions:
+No change to invocation commands. The output will now be significantly more verbose automatically.
+`python src/python/supervisor_qwen.py --model_dir ./models/qwen3_int4 ...`
+
+Fixes & Caveats:
+*   **Fix**: Provides visibility into the "Black Box" of NPU model compilation.
+*   **Fix**: Helps differentiate between Driver Hangs, OOM Kills, and Slow Compilation.
+
+Technical Metrics:
+*   **Log Level**: INFO (Global), DEBUG (NPU Plugin).
+*   **Diag Tool**: `free -h` (Memory).
