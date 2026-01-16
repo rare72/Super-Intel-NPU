@@ -72,9 +72,17 @@ def bake_qwen(staging_dir, output_dir, config_path):
             "ignored_scope": {"types": []}
         }
 
+        # Cleanup Stale Cache
+        if os.path.exists("./model_cache_qwen"):
+            logger.info(">>> [Bake] Cleaning up stale NPU cache...")
+            shutil.rmtree("./model_cache_qwen")
+
         # 2. Stage 1: Export & Compress (Dynamic)
         logger.info(">>> [Bake] Stage 1: Exporting + NNCF INT4...")
+        sys.stdout.flush()
 
+        # Use trust_remote_code=False for model to force internal Qwen2 implementation (More robust tracing)
+        # Use attn_implementation="eager" to fix graph tracing issues with SDPA
         model = OVModelForCausalLM.from_pretrained(
             staging_dir,
             export=True,
@@ -82,13 +90,26 @@ def bake_qwen(staging_dir, output_dir, config_path):
             load_in_8bit=False,
             quantization_config=quantization_config,
             use_cache=False, # Stateless
-            trust_remote_code=True # Qwen often needs this
+            trust_remote_code=False,
+            attn_implementation="eager"
         )
 
         model.save_pretrained(intermediate_dir)
 
+        # VERIFY SIZE
+        bin_path = os.path.join(intermediate_dir, "openvino_model.bin")
+        if os.path.exists(bin_path):
+            size_gb = os.path.getsize(bin_path) / (1024**3)
+            logger.info(f"    > Intermediate Model Size: {size_gb:.2f} GB")
+            if size_gb < 1.0:
+                raise RuntimeError(f"Exported model is too small ({size_gb:.2f} GB). Graph tracing failed.")
+
         # Save Tokenizer
-        tokenizer = AutoTokenizer.from_pretrained(staging_dir, trust_remote_code=True)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(staging_dir, trust_remote_code=True, fix_mistral_regex=True)
+        except TypeError:
+            tokenizer = AutoTokenizer.from_pretrained(staging_dir, trust_remote_code=True)
+
         tokenizer.save_pretrained(output_dir)
 
         del model

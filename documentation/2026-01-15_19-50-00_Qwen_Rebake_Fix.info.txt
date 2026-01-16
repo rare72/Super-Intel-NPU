@@ -1,0 +1,36 @@
+Task: Fix Qwen3 Model Baking Graph Tracing and Add Size Verification
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/bake_qwen.py` to fix a critical issue where the exported model graph was truncated (approx 500MB vs expected 5GB), causing NPU compilation hangs and invalid inference. Also added safety checks and cleanup logic.
+
+Detailed Implementation Notes:
+1.  **Graph Tracing Fix**:
+    *   **Disable Remote Code**: Set `trust_remote_code=False` for the model loading (but kept it `True` for tokenizer). This forces `transformers` to use its robust internal `Qwen2ForCausalLM` implementation instead of potentially unoptimized remote code that might confuse the OpenVINO tracer.
+    *   **Eager Attention**: Enabled `attn_implementation="eager"`. This disables `sdpa_attention` (Scaled Dot Product Attention), which was causing `TracerWarning`s and likely leading to the pruning of transformer layers during export. Standard attention is fully trace-compatible.
+
+2.  **Safety Verification**:
+    *   **Size Check**: Added a post-export check on the intermediate `.bin` file. If the file size is less than 1.0 GB, the script now raises a `RuntimeError` immediately, preventing the user from proceeding with a broken model.
+    *   **Cache Cleanup**: Added logic to recursively delete `./model_cache_qwen` at the start of the bake. This ensures that if the user rebakes, they don't accidentally load a stale NPU blob compiled from the previous broken model.
+
+3.  **Supervisor Update**:
+    *   Updated `src/python/supervisor_qwen.py` to reflect a more realistic compilation time estimate ("5-15 mins") for the full 5GB model on Core Ultra hardware.
+
+Usage Instructions:
+Run the baking script again to generate a valid model:
+`python src/python/bake_qwen.py`
+
+Then launch inference:
+`./launch_qwen.sh`
+
+Fixes & Caveats:
+*   **Fix**: Resolves the "500MB Model" issue where transformer layers were dropped.
+*   **Fix**: Prevents "Silent Compilation Hangs" caused by degenerate graphs.
+*   **Caveat**: "Eager" attention is slightly slower to export but ensures graph correctness. Inference speed on NPU is determined by the compiled blob, so runtime performance should remain high.
+
+Technical Metrics:
+*   **Minimum Valid Size**: 1.0 GB (Intermediate).
+*   **Attention Mode**: Eager (for export).
+*   **Remote Code**: Disabled (for model export).
