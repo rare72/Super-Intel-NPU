@@ -88,7 +88,28 @@ class QwenSupervisor:
 
         core.set_property({"CACHE_DIR": "./model_cache_qwen"})
 
-        model = core.compile_model(xml_path, self.device)
+        # Guardrail: Check for Dynamic Shapes before compilation to prevent Driver Crashes
+        logger.info("Inspecting model graph for dynamic shapes...")
+        model_obj = core.read_model(xml_path)
+
+        is_dynamic = False
+        for i, input_node in enumerate(model_obj.inputs):
+            partial_shape = input_node.get_partial_shape()
+            if partial_shape.is_dynamic:
+                logger.warning(f"  > Input {i} ({input_node.any_name}) has dynamic shape: {partial_shape}")
+                is_dynamic = True
+
+        if is_dynamic:
+            logger.error("CRITICAL: This model contains DYNAMIC SHAPES.")
+            logger.error("The 'supervisor_qwen.py' script is optimized for STATIC NPU execution only.")
+            logger.error("Running a dynamic model here causes the NPU driver to crash/hang.")
+            logger.error("-" * 50)
+            logger.error(f"SOLUTION: Please use the dynamic supervisor instead:")
+            logger.error(f"  python src/python/supervisor_qwen_int8.py --model_dir {self.model_path}")
+            logger.error("-" * 50)
+            sys.exit(1)
+
+        model = core.compile_model(model_obj, self.device)
         self.request = model.create_infer_request()
 
         # Map inputs
