@@ -1,0 +1,38 @@
+Task: Experimental Qwen3 INT8 Dynamic Bake & Supervisor
+
+Date: 2026-01-16
+Author: Jules
+
+Summary of Changes:
+Created a new, experimental toolchain for Qwen3-8B using INT8 quantization and Dynamic Shapes. This is distinct from the stable INT4/Static workflow.
+
+Detailed Implementation Notes:
+1.  **Baking Script (`src/python/bake_qwen_int8_dynamic.py`)**:
+    *   Wraps `optimum-cli` to perform the export.
+    *   **Config**: `weight-format int8`, `task text-generation-with-past` (Stateful).
+    *   **Trust Remote Code**: Enabled.
+    *   **Output**: `./models/pv1-qwen3_int8`.
+    *   **Note**: This script does NOT use NNCF or static reshaping. It produces a standard OpenVINO IR compatible with the CPU and iGPU.
+
+2.  **Supervisor Script (`src/python/supervisor_qwen_int8.py`)**:
+    *   Uses `optimum.intel.OVModelForCausalLM` directly, leveraging its built-in support for dynamic shapes and KV-caching.
+    *   **Device Support**: Defaults to `GPU` (iGPU) or `CPU`. NPU support is experimental and flagged with a warning due to potential driver instability with dynamic shapes.
+    *   **Generation**: Uses the standard `.generate()` API with sampling enabled (`temp=0.7`).
+
+Usage Instructions:
+1.  **Bake the Model**:
+    `python3 src/python/bake_qwen_int8_dynamic.py`
+    *(Requires `optimum-cli` in path)*
+
+2.  **Run Inference**:
+    `python3 src/python/supervisor_qwen_int8.py --device GPU --prompt "Your prompt here"`
+
+Fixes & Caveats:
+*   **Experimental**: This workflow is for testing INT8 accuracy and dynamic shape performance.
+*   **Caveat**: Dynamic shapes on NPU (Intel Core Ultra) may cause driver hangs. Use GPU or CPU for stability.
+*   **Caveat**: INT8 model size (~8GB) is significantly larger than INT4 (~5GB). Ensure >16GB RAM is available.
+
+Technical Metrics:
+*   **Quantization**: INT8 (Weight Only).
+*   **Shape**: Dynamic.
+*   **State**: Stateful (KV-Cache enabled).
