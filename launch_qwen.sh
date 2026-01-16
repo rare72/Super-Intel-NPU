@@ -23,4 +23,6 @@ python3 src/python/preflight_check.py "$MODEL_DIR/openvino_model.xml" >> $LOG_FI
 
 # 4. Run
 echo "[4/4] Starting Inference..."
-python3 src/python/supervisor_qwen.py --model_dir "$MODEL_DIR" --prompt "Explain the concept of recursion."
+# Forward all arguments to supervisor (e.g., --npu_turbo, --prompt "...")
+# If no prompt provided, defaults to internal default.
+python3 src/python/supervisor_qwen.py --model_dir "$MODEL_DIR" "$@"
