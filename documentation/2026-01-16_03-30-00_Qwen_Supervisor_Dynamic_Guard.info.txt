@@ -1,0 +1,35 @@
+Task: Implement Dynamic Shape Guardrail in Qwen Static Supervisor
+
+Date: 2026-01-16
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen.py` to inspect the OpenVINO model graph for dynamic shapes before attempting NPU compilation. This prevents `ZE_RESULT_ERROR_INVALID_ARGUMENT` crashes and driver hangs when users accidentally load dynamic models (like the INT8 experimental build) into the static workflow.
+
+Detailed Implementation Notes:
+1.  **Graph Inspection**:
+    *   Replaced the direct `core.compile_model(path)` call with `core.read_model(path)`. This loads the Intermediate Representation (IR) into CPU memory without triggering the hardware compiler.
+    *   Iterated through `model_obj.inputs` to check `get_partial_shape().is_dynamic`.
+
+2.  **Safety Logic**:
+    *   If any input dimension is dynamic (e.g., `-1`, `?`, or bounds like `922337...`), the script logs a `CRITICAL` error.
+    *   The error message explicitly directs the user to the correct script (`src/python/supervisor_qwen_int8.py`) for dynamic models.
+    *   The process exits with code 1, preventing the `compile_model` call that would crash the driver.
+
+3.  **Performance Impact**:
+    *   `read_model` is extremely fast compared to compilation. This check adds negligible latency to the startup sequence (<100ms) but saves minutes of waiting/crashing time for incorrect usage.
+
+Usage Instructions:
+Standard (Static) Usage (Unchanged):
+`python src/python/supervisor_qwen.py --model_dir ./models/qwen3_int4`
+
+If a user accidentally runs:
+`python src/python/supervisor_qwen.py --model_dir ./models/pv1-qwen3_int8`
+They will now see a clear error message instead of a stack trace.
+
+Fixes & Caveats:
+*   **Fix**: Prevents "to_shape was called on a dynamic shape" crashes.
+*   **UX**: Provides actionable feedback for script/model mismatches.
+
+Technical Metrics:
+*   **Detection Method**: `ov.PartialShape.is_dynamic`.
