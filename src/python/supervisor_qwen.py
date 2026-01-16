@@ -1,15 +1,26 @@
 import os
+import sys
 import argparse
 import time
 import datetime
 import numpy as np
 import torch
 import atexit
+import subprocess
+import logging
 from transformers import AutoTokenizer
 import openvino as ov
 
 # --- CONFIGURATION ---
 STATIC_SEQ_LEN = 4096
+
+# Setup basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("QwenSupervisor")
 
 class QwenSupervisor:
     def __init__(self, model_path, device="NPU"):
@@ -20,7 +31,7 @@ class QwenSupervisor:
         self.input_map = {}
 
     def load(self):
-        print(f"[Qwen] Loading Tokenizer from {self.model_path}...")
+        logger.info(f"Loading Tokenizer from {self.model_path}...")
         try:
             # Attempt to fix the specific Mistral-regex warning if supported
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True, fix_mistral_regex=True)
@@ -31,13 +42,39 @@ class QwenSupervisor:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = "<|endoftext|>"
 
-        print(f"[Qwen] Loading Model to {self.device} (This may take 2-5 mins for NPU Compilation)...")
-        core = ov.Core()
-        core.set_property({"CACHE_DIR": "./model_cache_qwen"})
-        if self.device == "NPU":
-            core.set_property("NPU", {"NPU_TURBO": "NO"})
+        # Diagnostics
+        logger.info("--- SYSTEM DIAGNOSTICS ---")
+        try:
+            subprocess.run(['free', '-h'], check=False)
+        except Exception:
+            pass
 
-        model = core.compile_model(os.path.join(self.model_path, "openvino_model.xml"), self.device)
+        xml_path = os.path.join(self.model_path, "openvino_model.xml")
+        if os.path.exists(xml_path):
+            size_mb = os.path.getsize(xml_path) / (1024*1024)
+            logger.info(f"Model file found: {xml_path} ({size_mb:.2f} MB)")
+        else:
+            logger.error(f"CRITICAL: Model file not found at {xml_path}")
+            sys.exit(1)
+
+        logger.info(f"Loading Model to {self.device} (This may take 2-5 mins for NPU Compilation)...")
+        sys.stdout.flush()
+
+        core = ov.Core()
+
+        # Enable Verbose OpenVINO Logging
+        logger.info("Enabling OpenVINO Verbose Logging...")
+        try:
+            core.set_property({"LOG_LEVEL": "LOG_INFO"})
+            if self.device == "NPU":
+                core.set_property("NPU", {"LOG_LEVEL": "LOG_DEBUG"})
+                core.set_property("NPU", {"NPU_TURBO": "NO"})
+        except Exception as e:
+            logger.warning(f"Could not set log properties: {e}")
+
+        core.set_property({"CACHE_DIR": "./model_cache_qwen"})
+
+        model = core.compile_model(xml_path, self.device)
         self.request = model.create_infer_request()
 
         # Map inputs
