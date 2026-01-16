@@ -1,0 +1,33 @@
+Task: Add Model Integrity Check and NPU_TURBO Flag to Qwen Supervisor
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen.py` to prevent the execution of truncated/broken models and to allow user configuration of the NPU Turbo mode.
+
+Detailed Implementation Notes:
+1.  **Model Integrity Check**:
+    *   Added logic to inspect the size of `openvino_model.bin` before attempting compilation.
+    *   **Threshold**: If the model binary is smaller than 2.0 GB (expected ~5GB for 8B INT4), the script now logs a `CRITICAL` error and exits immediately with code 1.
+    *   **Reasoning**: Previous bake attempts resulted in truncated ~500MB models, which caused the NPU compiler to hang indefinitely while trying to process the broken graph. This check ensures only valid models are sent to the driver.
+
+2.  **NPU_TURBO Configuration**:
+    *   Added a CLI argument `--npu_turbo`.
+    *   Default behavior remains `NPU_TURBO="NO"` (Safe Mode) to prevent driver crashes.
+    *   If `--npu_turbo` is passed, the property `{"NPU_TURBO": "YES"}` is sent to the OpenVINO NPU plugin. This allows advanced users to experiment with performance modes if their specific driver version is stable.
+
+Usage Instructions:
+Standard (Safe) Launch:
+`python src/python/supervisor_qwen.py --model_dir ./models/qwen3_int4`
+
+Turbo Mode (Experimental):
+`python src/python/supervisor_qwen.py --model_dir ./models/qwen3_int4 --npu_turbo`
+
+Fixes & Caveats:
+*   **Fix**: Prevents "Silent Hangs" caused by loading truncated ~500MB models.
+*   **Feature**: Adds runtime control over NPU power/performance states.
+
+Technical Metrics:
+*   **Integrity Threshold**: 2.0 GB.
+*   **Default Turbo**: OFF.
