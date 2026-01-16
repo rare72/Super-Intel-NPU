@@ -57,7 +57,7 @@ class QwenSupervisor:
             logger.error(f"CRITICAL: Model file not found at {xml_path}")
             sys.exit(1)
 
-        logger.info(f"Loading Model to {self.device} (This may take 2-5 mins for NPU Compilation)...")
+        logger.info(f"Loading Model to {self.device} (This may take 5-15 mins for NPU Compilation)...")
         sys.stdout.flush()
 
         core = ov.Core()
