@@ -74,11 +74,12 @@ class QwenSupervisor:
         core = ov.Core()
 
         # Enable Verbose OpenVINO Logging
-        logger.info("Enabling OpenVINO Verbose Logging...")
+        logger.info("Enabling OpenVINO Verbose Logging (TRACE Level)...")
         try:
             core.set_property({"LOG_LEVEL": "LOG_INFO"})
             if self.device == "NPU":
-                core.set_property("NPU", {"LOG_LEVEL": "LOG_DEBUG"})
+                # User requested HIGHER logging to debug compiler hangs
+                core.set_property("NPU", {"LOG_LEVEL": "LOG_TRACE"})
                 turbo_val = "YES" if self.turbo else "NO"
                 logger.info(f"Setting NPU_TURBO={turbo_val}")
                 core.set_property("NPU", {"NPU_TURBO": turbo_val})

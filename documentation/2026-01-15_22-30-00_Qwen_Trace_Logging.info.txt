@@ -1,0 +1,33 @@
+Task: Enable LOG_TRACE and Argument Forwarding for Qwen Launch
+
+Date: 2026-01-15
+Author: Jules
+
+Summary of Changes:
+Modified `src/python/supervisor_qwen.py` and `launch_qwen.sh` to enable maximum verbosity (`LOG_TRACE`) and allow flexible argument passing for debugging compiler hangs.
+
+Detailed Implementation Notes:
+1.  **LOG_TRACE Enablement**:
+    *   Updated `supervisor_qwen.py` to set the NPU log level to `LOG_TRACE` (previously `LOG_DEBUG`).
+    *   **Reasoning**: The user reported a "hang" during the `vertical-fusion-outlining` compilation phase. `LOG_TRACE` provides the most granular view of the compiler's internal passes, allowing us to pinpoint the exact graph operation causing the bottleneck.
+    *   **Note**: This will generate significantly more console output.
+
+2.  **Launch Script Flexibility**:
+    *   Updated `launch_qwen.sh` to use `"$@"` (argument forwarding).
+    *   This allows the user to pass flags like `--npu_turbo` or custom prompts directly to the shell script without editing it.
+    *   Example: `./launch_qwen.sh --npu_turbo --prompt "Test prompt"`
+
+Usage Instructions:
+To run with Turbo enabled (which might speed up compilation/inference):
+`./launch_qwen.sh --npu_turbo`
+
+To run with a custom prompt:
+`./launch_qwen.sh --prompt "What is 2+2?"`
+
+Fixes & Caveats:
+*   **Fix**: Uncovers "Root Cause" of compiler slowness via Trace logs.
+*   **Fix**: Enables easy toggling of NPU features via the standard launch script.
+*   **Caveat**: Trace logging is verbose and may impact console performance slightly, but is essential for deep debugging.
+
+Technical Metrics:
+*   **Log Level**: LOG_TRACE.
