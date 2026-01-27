@@ -1,0 +1,7 @@
+Script started on 2026-01-22 10:02:33-05:00 [COMMAND="python -u supervisor_manual_run-dolphin-npu_dynamic_new.py" TERM="xterm-256color" TTY="/dev/pts/1" COLUMNS="122" LINES="17"]
+--- [NPU MEMORY DEBUG START] ---
+Loading Dolphin 24B from: /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/model_staging/dolphin-24B_final
+
+❌ Script Encountered an Error: cannot import name 'Op' from 'openvino' (unknown location)
+
+Script done on 2026-01-22 10:02:33-05:00 [COMMAND_EXIT_CODE="1"]

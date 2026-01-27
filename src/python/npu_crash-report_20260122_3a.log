@@ -1,0 +1,41 @@
+Script started on 2026-01-22 12:07:34-05:00 [COMMAND="python -u supervisor_manual_run-dolphin-npu_dynamic_new.py" TERM="xterm-256color" TTY="/dev/pts/1" COLUMNS="80" LINES="24"]
+--- [NPU MEMORY DEBUG START] ---
+Loading Dolphin 24B from: /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/model_staging/dolphin-24B_final
+NPU_LOG: [DRIVER][driver.cpp:90] OS interface updated
+NPU_LOG: [CACHE][disk_cache.cpp:82] Cache is initialized, path: /home/phil2/.cache/ze_intel_npu_cache, max size: 4294967296
+NPU_LOG: [DRIVER][driver.cpp:101] 1 VPU device(s) found.
+NPU_LOG: [DRIVER][driver_handle.cpp:71] Driver properties returned successfully
+NPU_LOG: [DRIVER][driver_handle.cpp:71] Driver properties returned successfully
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using 63f09fce282d852431dfc248878449d42e458ad3 key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using 8aa5fa1ef9c06333f43ed075d707cc638eb7f920 key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using e468b8e7dbc2713d488f8637ebf70f8edf820baa key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using da7073e904e2a44deefc5712fd8b639d70f54c64 key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using c6f91a5bf714b3326ea846af8fad0a9125a53294 key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using de9f8e083800c5946aa27814aad14da2cbc7b187 key
+NPU_LOG: [CACHE][disk_cache.cpp:161] Cache hit using 83a579d6f6e29ae675b4c1ef71e7f79c8e02c842 key
+--- Sending Request to NPU ---
+NPU_LOG: *ERROR* [vpu_driver_api.cpp:329] Failed to mmap the memory using offset received from KMD
+NPU_LOG: *ERROR* [vpu_buffer_object.cpp:84] Failed to mmap the created buffer
+NPU_LOG: *ERROR* [vpu_device_context.cpp:178] Failed to allocate shared memory, size = 1007648608, type = 131078
+NPU_LOG: *ERROR* [elf_parser.cpp:380] Failed to copy elf::HostParsedInference, type: elf::AllocError, reason: Failed to allocate device buffer
+NPU_LOG: *ERROR* [ze_graph.cpp:291] Exception caught, msg: 'Driver error occurred'
+NPU_LOG: *ERROR* [vpu_driver_api.cpp:329] Failed to mmap the memory using offset received from KMD
+NPU_LOG: *ERROR* [vpu_buffer_object.cpp:84] Failed to mmap the created buffer
+NPU_LOG: *ERROR* [vpu_device_context.cpp:178] Failed to allocate shared memory, size = 1007648608, type = 131078
+NPU_LOG: *ERROR* [elf_parser.cpp:380] Failed to copy elf::HostParsedInference, type: elf::AllocError, reason: Failed to allocate device buffer
+NPU_LOG: *ERROR* [ze_graph.cpp:291] Exception caught, msg: 'Driver error occurred'
+
+❌ Script Encountered an Error: Exception from src/inference/src/cpp/infer_request.cpp:246:
+Exception from src/plugins/intel_npu/src/utils/src/zero/zero_wrappers.cpp:112:
+L0 pfnAppendGraphExecute result: ZE_RESULT_ERROR_UNKNOWN, code 0x7ffffffe - an action is required to complete the desired operation . 
+
+NPU_LOG: *ERROR* [vpu_driver_api.cpp:329] Failed to mmap the memory using offset received from KMD
+NPU_LOG: *ERROR* [vpu_buffer_object.cpp:84] Failed to mmap the created buffer
+NPU_LOG: *ERROR* [vpu_device_context.cpp:178] Failed to allocate shared memory, size = 1007648608, type = 131078
+NPU_LOG: *ERROR* [elf_parser.cpp:380] Failed to copy elf::HostParsedInference, type: elf::AllocError, reason: Failed to allocate device buffer
+NPU_LOG: *ERROR* [ze_graph.cpp:291] Exception caught, msg: 'Driver error occurred'
+NPU_LOG: *ERROR* [vpu_driver_api.cpp:329] Failed to mmap the memory using offset received from KMD
+NPU_LOG: *ERROR* [vpu_buffer_object.cpp:84] Failed to mmap the created buffer
+NPU_LOG: *ERROR* [vpu_device_context.cpp:178] Failed to allocate shared memory, size = 1007648608, type = 131078
+NPU_LOG: *ERROR* [elf_parser.cpp:380] Failed to copy elf::HostParsedInference, type: elf::AllocError, reason: Failed to allocate device buffer
+NPU_LOG: *ERROR* [ze_graph.cpp:291] Exception caught, msg: 'Driver error occurred'

@@ -2,7 +2,7 @@ import os
 import argparse
 from huggingface_hub import snapshot_download
 
-def download_qwen(model_id="mlabonne/Qwen3-8B-abliterated", staging_dir="./model_staging_qwen"):
+def download_qwen(model_id="mlabonne/Qwen3-8B-abliterated", staging_dir="./model_staging_qwen_exp1"):
     print(f"--- Qwen3 Downloader ---")
     print(f"Target Model: {model_id}")
     print(f"Staging Dir:  {staging_dir}")

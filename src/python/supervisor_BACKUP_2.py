@@ -120,13 +120,6 @@ class OfferingSupervisor:
                 core = ov.Core()
                 # Enable caching for speed
                 core.set_property({"CACHE_DIR": "./model_cache"})
-                # DISABLE NPU TURBO to prevent 0x7ffffffe (ZE_RESULT_ERROR_UNKNOWN)
-                # This stabilizes the Level Zero driver on Linux kernels
-                # Updated to use "NO" string boolean which is safer for property parsing
-                try:
-                    core.set_property("NPU", {"NPU_TURBO": "NO"})
-                except Exception as e:
-                    print(f"[Supervisor] Warning: Failed to set NPU_TURBO: {e}")
 
                 print(f"[Supervisor] Loading model to NPU (Checking Driver Cache / Compiling)...")
                 self.model = core.compile_model(model_path, "NPU")
@@ -205,11 +198,8 @@ class OfferingSupervisor:
 
             self.request.infer(dummy_inputs)
             print("[Supervisor] Warm-up complete. Driver is active.")
-            self.log_history("Warm-up successful.")
         except Exception as e:
-            msg = f"[Warning] Warm-up failed: {e}. Inference might be unstable."
-            print(msg)
-            self.log_history(msg)
+            print(f"[Warning] Warm-up failed: {e}. Inference might be unstable.")
 
     def format_prompt(self, user_prompt, system_message=None, style="neural"):
         if not self.tokenizer:
@@ -402,9 +392,7 @@ class OfferingSupervisor:
             try:
                 self.request.infer(inputs_dict)
             except Exception as e:
-                msg = f"[Error] Inference failed at step {i}: {e}"
-                print(msg)
-                self.log_history(msg)
+                print(f"[Error] Inference failed at step {i}: {e}")
                 break
 
             # D. Get Logits
@@ -434,21 +422,6 @@ class OfferingSupervisor:
         response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         self.print_metrics(response, inference_duration, len(generated_tokens), input_len)
 
-    def log_history(self, log_entry):
-        """Appends diagnostic data to a persistent history log file."""
-        log_dir = "log"
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        # Filename based on initialization timestamp to keep session logs grouped but persistent
-        if not hasattr(self, 'history_log_path'):
-            ts_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            self.history_log_path = os.path.join(log_dir, f"history_{ts_name}.log.txt")
-
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.history_log_path, "a") as f:
-            f.write(f"[{timestamp}] {log_entry}\n")
-
     def print_metrics(self, response, duration, generated_count, prompt_count):
         tps = generated_count / duration if duration > 0 else 0
         ttft = (duration / generated_count * 1000) if generated_count > 0 else 0
@@ -459,22 +432,13 @@ class OfferingSupervisor:
 
         timestamp = datetime.datetime.now().strftime("%a %b %d %H:%M:%S %Y")
 
-        metrics_output = [
-            f"[Metrics] Time: {duration:.2f}s",
-            f"[EXIT] Script finished at {timestamp}",
-            f"[EXIT] Processing Device: {self.active_device} ({'Stateful' if self.use_cache_state else 'Stateless'})",
-            f"[EXIT] Total Input Prompt Tokens: {prompt_count}",
-            f"[EXIT] Total Generated Tokens: {generated_count}",
-            f"[EXIT] TTFT (Avg Latency): {ttft:.2f} ms",
-            f"[EXIT] Tokens per Second: {tps:.2f}"
-        ]
-
-        for m in metrics_output:
-            print(m)
-            self.log_history(m)
-
-        # Also log the prompt and response for context
-        self.log_history(f"PROMPT_LEN: {prompt_count} | RESPONSE_LEN: {len(response)}")
+        print(f"[Metrics] Time: {duration:.2f}s")
+        print(f"[EXIT] Script finished at {timestamp}")
+        print(f"[EXIT] Processing Device: {self.active_device} ({'Stateful' if self.use_cache_state else 'Stateless'})")
+        print(f"[EXIT] Total Input Prompt Tokens: {prompt_count}")
+        print(f"[EXIT] Total Generated Tokens: {generated_count}")
+        print(f"[EXIT] TTFT (Avg Latency): {ttft:.2f} ms")
+        print(f"[EXIT] Tokens per Second: {tps:.2f}")
 
     def inference_loop(self):
         print("[Supervisor] Starting Interactive Mode. Type 'EXIT' to quit.")
@@ -518,7 +482,6 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default=None, help="Single-shot prompt to run")
     parser.add_argument("--system_message", type=str, default=None, help="System message/Persona")
     parser.add_argument("--chat_style", type=str, choices=["neural", "llama3", "raw"], default="neural", help="Chat template style")
-    parser.add_argument("--max_tokens", type=int, default=128, help="Max tokens (not strictly used in static loop but good for compat)")
 
     args = parser.parse_args()
 

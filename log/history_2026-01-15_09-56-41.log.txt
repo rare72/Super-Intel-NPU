@@ -1,0 +1,16 @@
+[2026-01-15 09:56:41] [Warning] Warm-up failed: Exception from src/inference/src/cpp/infer_request.cpp:224:
+Exception from src/plugins/intel_npu/src/utils/src/zero/zero_wrappers.cpp:112:
+L0 pfnAppendGraphExecute result: ZE_RESULT_ERROR_UNKNOWN, code 0x7ffffffe - an action is required to complete the desired operation . 
+. Inference might be unstable.
+[2026-01-15 09:56:41] [Error] Inference failed at step 0: Exception from src/inference/src/cpp/infer_request.cpp:224:
+Exception from src/plugins/intel_npu/src/utils/src/zero/zero_wrappers.cpp:112:
+L0 pfnAppendGraphExecute result: ZE_RESULT_ERROR_UNKNOWN, code 0x7ffffffe - an action is required to complete the desired operation . 
+
+[2026-01-15 09:56:41] [Metrics] Time: 0.02s
+[2026-01-15 09:56:41] [EXIT] Script finished at Thu Jan 15 09:56:41 2026
+[2026-01-15 09:56:41] [EXIT] Processing Device: NPU (Stateless)
+[2026-01-15 09:56:41] [EXIT] Total Input Prompt Tokens: 56
+[2026-01-15 09:56:41] [EXIT] Total Generated Tokens: 0
+[2026-01-15 09:56:41] [EXIT] TTFT (Avg Latency): 0.00 ms
+[2026-01-15 09:56:41] [EXIT] Tokens per Second: 0.00
+[2026-01-15 09:56:41] PROMPT_LEN: 56 | RESPONSE_LEN: 0

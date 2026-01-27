@@ -1,0 +1,131 @@
+=== Qwen3 Launch Sequence ===
+Thu 15 Jan 2026 04:04:02 PM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6: 14427 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7: 14430 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 56.18 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---
+=== Qwen3 Launch Sequence ===
+Thu 15 Jan 2026 06:43:40 PM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6: 22054 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7: 22057 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 54.97 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---
+=== Qwen3 Launch Sequence ===
+Thu 15 Jan 2026 07:35:55 PM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6:  6996 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7:  6999 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 52.86 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---
+=== Qwen3 Launch Sequence ===
+Thu 15 Jan 2026 10:04:28 PM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6: 15139 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7: 15142 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 51.26 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Warning: .bin file not found at ./models/qwen3_int4/openvino_model.bin
+[Audit] Critical: XML file does not exist: ./models/qwen3_int4/openvino_model.xml
+=== Qwen3 Launch Sequence ===
+Thu 15 Jan 2026 10:09:07 PM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6: 17154 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7: 17157 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 55.45 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---
+=== Qwen3 Launch Sequence ===
+Fri 16 Jan 2026 12:10:28 AM EST
+sudo: 1 incorrect password attempt
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 54.79 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---
+=== Qwen3 Launch Sequence ===
+Fri 16 Jan 2026 12:17:43 AM EST
+[System] Initiating NPU Driver Reset...
+scripts/npu_reset.sh: line 6: 22422 Killed                  sudo pkill -9 -f supervisor.py
+scripts/npu_reset.sh: line 7: 22425 Killed                  sudo pkill -9 -f executive_shard
+[SUCCESS] NPU driver reloaded and /dev/accel/accel0 is visible.
+--- NPU Health Check ---
+[Health] Thermal sensors not exposed by current driver.
+[Health] Available System RAM: 54.71 GB
+[SUCCESS] Hardware is idle and cool.
+--- New Offering: NPU Pre-Flight Audit ---
+[Audit] Checking Model: ./models/qwen3_int4/openvino_model.xml
+[Audit] Binary Size: 4.52 GB
+[SUCCESS] Model size is within INT4 safety limits (~4-5GB).
+[Audit] Model loaded successfully for inspection.
+[Audit] Input 'input_ids' Shape: [1,4096]
+[Audit] Input 'attention_mask' Shape: [1,4096]
+[Audit] Input 'position_ids' Shape: [1,4096]
+[SUCCESS] Model is STATIC and NPU-ready.
+--- Audit Complete: System Green for NPU Load ---

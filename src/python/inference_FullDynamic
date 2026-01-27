@@ -1,0 +1,21 @@
+from optimum.intel import OVModelForCausalLM
+from transformers import AutoTokenizer
+
+"""
+Step,Action,Command / Code
+CLI Bake,Export with no shape limits,optimum-cli export openvino --model mlabonne/Qwen3-8B-abliterated --task text-generation-with-past --weight-format int8 ./qwen3_dynamic
+
+Python Run,Load as dynamic,"model = OVModelForCausalLM.from_pretrained(""./qwen3_dynamic"", device=""NPU"", dynamic_shapes=True)"
+"""
+
+
+model = OVModelForCausalLM.from_pretrained("/home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/model_staging_qwen/", device="NPU")
+tokenizer = AutoTokenizer.from_pretrained("/home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/model_staging_qwen/")
+
+# Simple prompt
+inputs = tokenizer("Hello NPU!", return_tensors="pt")
+outputs = model.generate(**inputs, max_new_tokens=256)
+print(tokenizer.decode(outputs[0]))
+
+
+
