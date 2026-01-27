@@ -86,7 +86,7 @@ class QwenSupervisor:
         except Exception as e:
             logger.warning(f"Could not set log properties: {e}")
 
-        core.set_property({"CACHE_DIR": "./model_cache_qwen"})
+        core.set_property({"CACHE_DIR": "/Super-Intel-NPU/cache/cache_npu"})
 
         # Guardrail: Check for Dynamic Shapes before compilation to prevent Driver Crashes
         logger.info("Inspecting model graph for dynamic shapes...")
@@ -205,7 +205,7 @@ class QwenSupervisor:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_dir", default="./models/qwen3_int4")
+    parser.add_argument("--model_dir", default="models/model_CURRENT")
     parser.add_argument("--prompt", default="Why is the sky blue?")
     parser.add_argument("--npu_turbo", action="store_true", help="Enable NPU Turbo Mode (Experimental)")
     args = parser.parse_args()
