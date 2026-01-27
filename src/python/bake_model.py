@@ -54,12 +54,26 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
     logger = logging.getLogger()
     logger.info(f">>> [Bake] Starting process for model: {model_id}")
 
-    intermediate_dir = os.path.join(output_dir, "intermediate_dynamic")
+    # DIRECTORY STRUCTURE UPDATE:
+    # 1. Download -> staging_dir (model/model_template)
+    # 2. Conversion Output -> conversion_dir (model/model_staging)
+    # 3. Final Usage -> output_dir (models/model_CURRENT)
+
+    conversion_dir = "model/model_staging"
+    intermediate_dir = os.path.join(conversion_dir, "intermediate_dynamic")
+
+    # Ensure conversion dir exists
+    os.makedirs(conversion_dir, exist_ok=True)
+    os.makedirs(intermediate_dir, exist_ok=True)
 
     try:
         # 1. Download Open-Weight Model
-        logger.info(f">>> [Bake] Downloading to {staging_dir}...")
-        snapshot_download(repo_id=model_id, local_dir=staging_dir)
+        # MODEL CACHE: /Super-Intel-NPU/cache/model_<Name>
+        model_name_clean = model_id.split("/")[-1]
+        hf_cache_path = f"/Super-Intel-NPU/cache/model_{model_name_clean}"
+
+        logger.info(f">>> [Bake] Downloading to {staging_dir} (Cache: {hf_cache_path})...")
+        snapshot_download(repo_id=model_id, local_dir=staging_dir, cache_dir=hf_cache_path)
 
         # 2. Load NNCF Configuration
         logger.info(f">>> [Bake] Loading NNCF config from {config_path}...")
@@ -89,9 +103,9 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
         logger.info(f">>> [Bake] Saving Intermediate (Dynamic) IR to {intermediate_dir}...")
         model.save_pretrained(intermediate_dir)
 
-        # Save Tokenizer to final output as well
+        # Save Tokenizer to conversion dir (staging) as well
         tokenizer = AutoTokenizer.from_pretrained(staging_dir)
-        tokenizer.save_pretrained(output_dir)
+        tokenizer.save_pretrained(conversion_dir)
 
         # Cleanup Stage 1
         del model
@@ -144,15 +158,16 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             ov_model.validate_nodes_and_infer_types()
 
         # 5. Save Final Static Model
-        final_xml_path = os.path.join(output_dir, "openvino_model.xml")
-        final_bin_path = os.path.join(output_dir, "openvino_model.bin")
+        # We save to conversion_dir first (model/model_staging)
+        final_xml_path = os.path.join(conversion_dir, "openvino_model.xml")
+        final_bin_path = os.path.join(conversion_dir, "openvino_model.bin")
 
-        logger.info(f">>> [Bake] Serializing Final Static IR to {output_dir}...")
+        logger.info(f">>> [Bake] Serializing Final Static IR to {conversion_dir}...")
         ov.save_model(ov_model, final_xml_path)
 
         # Copy Config Files from Intermediate to Final
         # OpenVINO save_model only saves .xml and .bin. We need the JSON configs for Optimum to load it later.
-        logger.info(">>> [Bake] Migrating config files to final output...")
+        logger.info(">>> [Bake] Migrating config files to conversion output...")
 
         # Force config.json to explicitly say use_cache: false to prevent future confusion
         config_src = os.path.join(intermediate_dir, "config.json")
@@ -161,7 +176,7 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
                 config_json = json.load(f)
             config_json["use_cache"] = False
             config_json["torchscript"] = True # Hint to treat as static graph
-            with open(os.path.join(output_dir, "config.json"), 'w') as f:
+            with open(os.path.join(conversion_dir, "config.json"), 'w') as f:
                 json.dump(config_json, f, indent=2)
             logger.debug(f"    > Patched and Copied config.json")
 
@@ -170,7 +185,7 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             if filename == "config.json": continue # Handled above
             if filename.endswith(".json") or filename.endswith(".model"):
                 src_file = os.path.join(intermediate_dir, filename)
-                dst_file = os.path.join(output_dir, filename)
+                dst_file = os.path.join(conversion_dir, filename)
                 if not os.path.exists(dst_file): # Don't overwrite tokenizer if already saved
                     shutil.copy2(src_file, dst_file)
                     logger.debug(f"    > Copied {filename}")
@@ -211,7 +226,15 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
             logger.critical(">>> [Bake] FATAL: Verification failed.")
             sys.exit(1)
 
-        logger.info(f">>> [Bake] Success! Optimized NPU-ready model is at {output_dir}")
+        logger.info(f">>> [Bake] Success! Optimized NPU-ready model is at {conversion_dir}")
+
+        # 7. Final Copy to Output Dir
+        logger.info(f">>> [Bake] Publishing to Final Directory: {output_dir}...")
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        # Copy from staging to final
+        shutil.copytree(conversion_dir, output_dir, ignore=shutil.ignore_patterns("intermediate_dynamic"))
+        logger.info(f">>> [Bake] Model published successfully.")
 
     except Exception as e:
         logger.error(f"Bake Process Failed: {e}")
@@ -221,8 +244,8 @@ def bake_model(model_id, staging_dir, output_dir, config_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bake a model into NNCF INT4 OpenVINO format.")
     parser.add_argument("--model_id", type=str, default="meta-llama/Meta-Llama-3-8B", help="HuggingFace Model ID")
-    parser.add_argument("--staging_dir", type=str, default="./model_staging", help="Directory for raw download")
-    parser.add_argument("--output_dir", type=str, default="./offering_int4_binary", help="Directory for final output")
+    parser.add_argument("--staging_dir", type=str, default="model/model_template", help="Directory for raw download")
+    parser.add_argument("--output_dir", type=str, default="models/model_CURRENT", help="Directory for final output")
     parser.add_argument("--config", type=str, default="src/python/nncf_config.json", help="Path to NNCF config json")
 
     # Logging Args

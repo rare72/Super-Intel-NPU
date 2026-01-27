@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # --- CONFIGURATION ---
-MODEL_XML="./models/neuralchat_int4/openvino_model.xml"
+MODEL_XML="models/model_CURRENT"
 TOKENIZER_ID="Intel/neural-chat-7b-v3-1"
-CACHE_DIR="./model_cache"
+CACHE_DIR="/Super-Intel-NPU/cache/cache_npu"
 TEST_PROMPT="Note the total number of planets; then List those planets starting from Mercury."
 LOG_DIR="./log"
 mkdir -p "$LOG_DIR"

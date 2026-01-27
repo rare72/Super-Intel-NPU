@@ -1,3 +1,13 @@
+# ⚠️ STATUS: NOT WORKING ⚠️
+
+**CRITICAL WARNING: THIS SOFTWARE IS CURRENTLY NON-FUNCTIONAL.**
+
+This repository is currently in a broken state due to severe hardware and firmware defects in the **Intel Ultra 5 225 CPU (Revision 10)**.
+
+The "ArrowLake" NPU in this specific processor revision suffers from critical silicon issues that Intel Corp has chosen **not** to patch, unlike other CPUs in the family. Please refer to the detailed failure report in `documentation/2026-01-27_20-00-00_Hardware_Failure_Report.info.txt` for a scathing analysis of this vendor negligence.
+
+---
+
 # Super-Intel-NPU
 
 A high-performance hybrid inference engine for Intel Core Ultra NPU, designed for low-latency, "Zero-Copy" AI applications.

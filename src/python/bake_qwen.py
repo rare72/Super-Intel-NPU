@@ -42,7 +42,16 @@ def bake_qwen(staging_dir, output_dir, config_path):
     logger.info(f"    > Seq Len: {STATIC_SEQ_LEN}")
     logger.info(f"    > Staging: {staging_dir}")
 
-    intermediate_dir = os.path.join(output_dir, "intermediate_dynamic")
+    # DIRECTORY STRUCTURE UPDATE:
+    # 1. Download -> staging_dir (model/model_template)
+    # 2. Conversion Output -> conversion_dir (model/model_staging)
+    # 3. Final Usage -> output_dir (models/model_CURRENT)
+
+    conversion_dir = "model/model_staging"
+    intermediate_dir = os.path.join(conversion_dir, "intermediate_dynamic")
+
+    os.makedirs(conversion_dir, exist_ok=True)
+    os.makedirs(intermediate_dir, exist_ok=True)
 
     try:
         # 0. Pre-Bake Fix: Patch Qwen3 to Qwen2 if needed
@@ -73,9 +82,14 @@ def bake_qwen(staging_dir, output_dir, config_path):
         }
 
         # Cleanup Stale Cache
-        if os.path.exists("./model_cache_qwen"):
-            logger.info(">>> [Bake] Cleaning up stale NPU cache...")
-            shutil.rmtree("./model_cache_qwen")
+        npu_cache_path = "/Super-Intel-NPU/cache/cache_npu"
+        if os.path.exists(npu_cache_path):
+            logger.info(f">>> [Bake] Cleaning up stale NPU cache at {npu_cache_path}...")
+            # We use try/except in case of permissions issues with the global cache
+            try:
+                shutil.rmtree(npu_cache_path)
+            except Exception as e:
+                logger.warning(f"Could not clear cache: {e}")
 
         # 2. Stage 1: Export & Compress (Dynamic)
         logger.info(">>> [Bake] Stage 1: Exporting + NNCF INT4...")
@@ -110,7 +124,7 @@ def bake_qwen(staging_dir, output_dir, config_path):
         except TypeError:
             tokenizer = AutoTokenizer.from_pretrained(staging_dir, trust_remote_code=True)
 
-        tokenizer.save_pretrained(output_dir)
+        tokenizer.save_pretrained(conversion_dir)
 
         del model
         gc.collect()
@@ -136,19 +150,27 @@ def bake_qwen(staging_dir, output_dir, config_path):
             ov_model.validate_nodes_and_infer_types()
 
         # 4. Save Final
-        final_xml = os.path.join(output_dir, "openvino_model.xml")
-        logger.info(f">>> [Bake] Saving final static model to {output_dir}...")
+        # We save to conversion_dir first
+        final_xml = os.path.join(conversion_dir, "openvino_model.xml")
+        logger.info(f">>> [Bake] Saving final static model to {conversion_dir}...")
         ov.save_model(ov_model, final_xml)
 
         # Copy Configs
-        shutil.copy2(os.path.join(intermediate_dir, "config.json"), os.path.join(output_dir, "config.json"))
+        shutil.copy2(os.path.join(intermediate_dir, "config.json"), os.path.join(conversion_dir, "config.json"))
         # Copy others if exist
         for f_name in os.listdir(intermediate_dir):
-            if f_name.endswith(".json") and "config" in f_name and not os.path.exists(os.path.join(output_dir, f_name)):
-                shutil.copy2(os.path.join(intermediate_dir, f_name), os.path.join(output_dir, f_name))
+            if f_name.endswith(".json") and "config" in f_name and not os.path.exists(os.path.join(conversion_dir, f_name)):
+                shutil.copy2(os.path.join(intermediate_dir, f_name), os.path.join(conversion_dir, f_name))
 
         # Cleanup
         shutil.rmtree(intermediate_dir)
+
+        # 5. Final Copy to Output Dir
+        logger.info(f">>> [Bake] Publishing to Final Directory: {output_dir}...")
+        if os.path.exists(output_dir):
+            shutil.rmtree(output_dir)
+        shutil.copytree(conversion_dir, output_dir, ignore=shutil.ignore_patterns("intermediate_dynamic"))
+
         logger.info(">>> [Bake] DONE.")
 
     except Exception as e:
@@ -158,8 +180,8 @@ def bake_qwen(staging_dir, output_dir, config_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--staging_dir", default="./model_staging_qwen")
-    parser.add_argument("--output_dir", default="./models/qwen3_int4")
+    parser.add_argument("--staging_dir", default="model/model_template")
+    parser.add_argument("--output_dir", default="models/model_CURRENT")
     parser.add_argument("--config", default="src/python/nncf_config.json")
     args = parser.parse_args()
 

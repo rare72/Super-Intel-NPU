@@ -1,7 +1,7 @@
 #!/bin/bash
 # Master Launch Script for Qwen3-8B (INT4/NPU)
 
-MODEL_DIR="./models/qwen3_int4"
+MODEL_DIR="models/model_CURRENT"
 LOG_FILE="qwen_history.log"
 
 echo "=== Qwen3 Launch Sequence ===" | tee -a $LOG_FILE

@@ -97,6 +97,11 @@ class OfferingSupervisor:
     def load_inference_engine(self):
         print(f"\n[Supervisor] Loading Inference Engine on {self.device}...")
 
+        # Default to standard path if not specified
+        if not self.model_xml and os.path.exists("models/model_CURRENT"):
+            print("[Supervisor] No model specified, using 'models/model_CURRENT'...")
+            self.model_xml = "models/model_CURRENT"
+
         model_path = self.model_xml
         # If it's a directory, assume standard bake structure
         if model_path and os.path.isdir(model_path):
@@ -118,8 +123,8 @@ class OfferingSupervisor:
             print("[Supervisor] NPU detected. Using Strict Static Loading (Raw OpenVINO Core)...")
             try:
                 core = ov.Core()
-                # Enable caching for speed
-                core.set_property({"CACHE_DIR": "./model_cache"})
+                # Enable caching for speed (Uniform NPU location)
+                core.set_property({"CACHE_DIR": "/Super-Intel-NPU/cache/cache_npu"})
                 # DISABLE NPU TURBO to prevent 0x7ffffffe (ZE_RESULT_ERROR_UNKNOWN)
                 # This stabilizes the Level Zero driver on Linux kernels
                 # Updated to use "NO" string boolean which is safer for property parsing
@@ -162,7 +167,7 @@ class OfferingSupervisor:
                 self.model = OVModelForCausalLM.from_pretrained(
                     model_dir,
                     device=self.device,
-                    ov_config={"CACHE_DIR": "./model_cache", "PERFORMANCE_HINT": "LATENCY"},
+                    ov_config={"CACHE_DIR": "/Super-Intel-NPU/cache/cache_npu", "PERFORMANCE_HINT": "LATENCY"},
                     compile=True,
                     use_cache=try_cache
                 )
