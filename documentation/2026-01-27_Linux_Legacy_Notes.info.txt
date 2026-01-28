@@ -1,0 +1,37 @@
+LINUX LEGACY WORKFLOW NOTES (ARCHIVED 2026-01-27)
+===================================================
+
+This document contains instructions for the Legacy Linux environment, which has been superseded by the Windows 11 / MSVC v145 toolchain.
+
+These instructions are preserved for reference only and are NOT compatible with the active Windows environment.
+
+---
+
+### Previous Linux Quick Start
+
+1.  **Environment Setup:**
+    ```bash
+    ./archive/scripts/linux_setup_env.sh
+    ```
+
+2.  **Bake the Model:**
+    Downloads and converts the model to NPU-optimized INT4.
+    ```bash
+    python src/python/bake_model.py
+    ```
+
+3.  **Run Inference (Recommended):**
+    Use the master launch script to ensure hardware health and proper logging.
+    ```bash
+    ./archive/linux_launch.sh
+    ```
+
+### Linux Diagnostic Tools
+
+The project included a suite of tools to prevent NPU hangs on the Linux Kernel driver:
+
+*   **`./archive/linux_launch.sh`**: The master switch. Handles Hard Reset -> Vitals Check -> Execution.
+*   **`archive/scripts/linux_npu_reset.sh`**: Hard resets the Linux kernel NPU driver (use if device disappears).
+
+### Notes on Linux Failure
+The Linux environment suffered from severe driver instability on the Intel Ultra 5 225 (Rev 10) "ArrowLake" CPU. The decision was made to migrate to Windows 11 24H2 where the MCDM driver model provides better stability for this specific silicon revision.

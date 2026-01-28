@@ -124,7 +124,17 @@ class OfferingSupervisor:
             try:
                 core = ov.Core()
                 # Enable caching for speed (Uniform NPU location)
-                core.set_property({"CACHE_DIR": "/Super-Intel-NPU/cache/cache_npu"})
+                # Windows Path normalization for cache
+                cache_dir = os.path.normpath("C:/Super-Intel-NPU/cache/cache_npu") if os.name == 'nt' else "/Super-Intel-NPU/cache/cache_npu"
+
+                # Create cache dir if it doesn't exist
+                if not os.path.exists(cache_dir):
+                    try:
+                        os.makedirs(cache_dir, exist_ok=True)
+                    except Exception:
+                        pass # Might fail on permissions, let OpenVINO handle or fail gracefully
+
+                core.set_property({"CACHE_DIR": cache_dir})
                 # DISABLE NPU TURBO to prevent 0x7ffffffe (ZE_RESULT_ERROR_UNKNOWN)
                 # This stabilizes the Level Zero driver on Linux kernels
                 # Updated to use "NO" string boolean which is safer for property parsing
@@ -164,10 +174,11 @@ class OfferingSupervisor:
         for try_cache in configs_to_try:
             try:
                 print(f"[Supervisor] Attempting Optimum load with use_cache={try_cache}...")
+                cache_dir = os.path.normpath("C:/Super-Intel-NPU/cache/cache_npu") if os.name == 'nt' else "/Super-Intel-NPU/cache/cache_npu"
                 self.model = OVModelForCausalLM.from_pretrained(
                     model_dir,
                     device=self.device,
-                    ov_config={"CACHE_DIR": "/Super-Intel-NPU/cache/cache_npu", "PERFORMANCE_HINT": "LATENCY"},
+                    ov_config={"CACHE_DIR": cache_dir, "PERFORMANCE_HINT": "LATENCY"},
                     compile=True,
                     use_cache=try_cache
                 )
@@ -226,7 +237,14 @@ class OfferingSupervisor:
         messages.append({"role": "user", "content": user_prompt})
 
         try:
-            if style == "neural":
+            if style == "phi4":
+                # Phi-4 Chat Template (Standard Phi-3/4 Instruct)
+                # <|user|>\n...<|end|>\n<|assistant|>\n
+                full_text = f"<|user|>\n{user_prompt}<|end|>\n<|assistant|>\n"
+                if system_message:
+                    full_text = f"<|system|>\n{system_message}<|end|>\n" + full_text
+                return full_text
+            elif style == "neural":
                 full_text = ""
                 if system_message:
                     full_text += f"### System:\n{system_message}\n"
@@ -522,7 +540,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--prompt", type=str, default=None, help="Single-shot prompt to run")
     parser.add_argument("--system_message", type=str, default=None, help="System message/Persona")
-    parser.add_argument("--chat_style", type=str, choices=["neural", "llama3", "raw"], default="neural", help="Chat template style")
+    parser.add_argument("--chat_style", type=str, choices=["neural", "llama3", "phi4", "raw"], default="neural", help="Chat template style")
     parser.add_argument("--max_tokens", type=int, default=128, help="Max tokens (not strictly used in static loop but good for compat)")
 
     args = parser.parse_args()
