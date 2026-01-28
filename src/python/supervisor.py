@@ -44,14 +44,19 @@ class OfferingSupervisor:
 
     def setup_resources(self):
         print(f"[Supervisor] Initializing Resources (SHM: {self.shm_name})...")
-        if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
-        if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
 
-        try:
-            os.mkfifo(DEFAULT_REPORT_PIPE, 0o666)
-            os.mkfifo(DEFAULT_COMMAND_PIPE, 0o666)
-        except OSError:
-             pass # Might exist
+        # Linux-specific Named Pipes for C++ Monitor
+        if os.name != 'nt':
+            if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
+            if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
+
+            try:
+                os.mkfifo(DEFAULT_REPORT_PIPE, 0o666)
+                os.mkfifo(DEFAULT_COMMAND_PIPE, 0o666)
+            except OSError:
+                 pass # Might exist
+        else:
+            print("[Supervisor] Windows detected: Skipping Named Pipe creation.")
 
         try:
             temp = shared_memory.SharedMemory(name=self.shm_name)
@@ -257,6 +262,10 @@ class OfferingSupervisor:
             return f"{system_message}\n{user_prompt}" if system_message else user_prompt
 
     def launch_executive(self):
+        if os.name == 'nt':
+            print("[Supervisor] Windows detected: C++ Hardware Monitor disabled (Linux only).")
+            return
+
         print("[Supervisor] Launching C++ Hardware Monitor...")
         binary_path = "./src/cpp/build/executive_shard"
         if not os.path.exists(binary_path):
@@ -527,8 +536,9 @@ class OfferingSupervisor:
              try: os.close(self.command_fd)
              except: pass
 
-        if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
-        if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
+        if os.name != 'nt':
+            if os.path.exists(DEFAULT_REPORT_PIPE): os.remove(DEFAULT_REPORT_PIPE)
+            if os.path.exists(DEFAULT_COMMAND_PIPE): os.remove(DEFAULT_COMMAND_PIPE)
         print("[Cleanup] Done.")
 
 if __name__ == "__main__":
