@@ -1,0 +1,140 @@
+SUPER-INTEL-NPU: WINDOWS 11 USER GUIDE
+================================================================================
+Target Platform: Windows 11 (24H2)
+Hardware: Intel Core Ultra 5 225 (Rev 10) "Arrow Lake"
+Toolchain: Visual Studio 2026 Build Tools (MSVC v145)
+
+--------------------------------------------------------------------------------
+1. INTRODUCTION
+--------------------------------------------------------------------------------
+This repository has been migrated to a Windows-native environment to leverage the stability of the MCDM driver model for the Arrow Lake NPU. Unlike the Linux environment, which suffered from driver resets, the Windows stack provides robust access to the NPU's full 31.8 GB Shared Virtual Memory (SVM) aperture.
+
+This guide details the setup, model preparation (Phi-4), and execution workflow.
+
+--------------------------------------------------------------------------------
+2. PREREQUISITES
+--------------------------------------------------------------------------------
+Before running the automated scripts, ensure the following are installed:
+
+A. Visual Studio 2026 Build Tools (v18.2.1)
+   - Workload: "Desktop development with C++"
+   - Components: MSVC v145 - VS 2026 C++ x64/x86 build tools
+   - Purpose: Provides the native NPU 3 instruction set optimizations.
+
+B. Python 3.12 (64-bit)
+   - Ensure "Add Python to PATH" is checked during installation.
+
+C. CMake (3.25 or newer)
+   - Required for building OpenVINO extensions if needed.
+
+D. Git for Windows
+   - For repository management.
+
+--------------------------------------------------------------------------------
+3. INSTALLATION & SETUP
+--------------------------------------------------------------------------------
+We use PowerShell for all operations. Open a terminal as Administrator.
+
+1.  Run the Setup Script:
+    ```powershell
+    .\windows_setup_env.ps1
+    ```
+    - This script checks for Python.
+    - Creates a virtual environment: `openvino_env`.
+    - Installs critical libraries: `openvino==2025.4.1`, `openvino-genai`, `optimum-intel`, `nncf`.
+
+2.  Manual Activation (If needed later):
+    ```powershell
+    .\openvino_env\Scripts\Activate.ps1
+    ```
+
+--------------------------------------------------------------------------------
+4. NPU ISOLATION STRATEGY (CRITICAL)
+--------------------------------------------------------------------------------
+To prevent the framework from accidentally loading onto the iGPU or discrete NVIDIA GPUs, we enforce strict isolation.
+
+Variables enforced by `windows_launch.ps1`:
+- `ZE_AFFINITY_MASK = 0.0`: Tells the Level Zero loader to expose ONLY the first device (NPU 0) of the first driver.
+- `ZE_ENABLE_PCI_ID_DEVICE_ORDER = 1`: Ensures predictable enumeration based on PCI ID (NPU is usually 00:0b.0).
+- `OV_NPU_LOG_LEVEL = LOG_INFO`: Enables visibility into the "Handshake".
+
+Verification Tool:
+Run the included script to confirm the "Big Door" (32GB Aperture) is open and NVIDIA GPUs are hidden:
+```powershell
+python src/python/verify_npu_isolation.py
+```
+*Look for "SUCCESS: GPUs isolated" and confirmation of "Architecture: 4000".*
+
+--------------------------------------------------------------------------------
+5. DOWNLOADING & BAKING THE MODEL (Phi-4)
+--------------------------------------------------------------------------------
+The Phi-4 model (9GB) requires a specific "Bake" process to convert it from the raw ONNX/PyTorch format into an NPU-Optimized OpenVINO IR (INT4).
+
+We do NOT use the CPU branch. We use the **GPU Branch** of `microsoft/phi-4-onnx` because its memory layout (FP16/INT4-RTN) is closer to the NPU's native tensor format.
+
+Automated Workflow:
+Run the baking script:
+```powershell
+python src/python/bake_phi4.py
+```
+
+What this script does (The Strategic Workflow):
+1.  **Download (Phase 1):**
+    - Connects to HuggingFace Hub.
+    - Target: `microsoft/phi-4-onnx`
+    - Filter: `gpu/*` (Downloads only the GPU-optimized branch).
+    - Destination: `model/model_template`
+    - Cache: Stores raw files in `C:/Super-Intel-NPU/cache/model_phi-4-onnx`.
+
+2.  **Conversion (Phase 2):**
+    - Uses `optimum-cli` to ingest the downloaded GPU model.
+    - Applies NNCF Compression: `INT4` Symetric.
+    - Optimization: `--task text-generation-with-past` (Enables KV Caching).
+    - Output: `model/model_staging`.
+
+3.  **Publish (Phase 3):**
+    - Copies the final `.xml` and `.bin` artifacts to `models/model_CURRENT`.
+    - This is the directory the Supervisor reads by default.
+
+--------------------------------------------------------------------------------
+6. EXECUTION
+--------------------------------------------------------------------------------
+Once the model is baked, use the launch script to start the session. This script automatically sets the isolation environment variables before running Python.
+
+Standard Launch:
+```powershell
+.\windows_launch.ps1
+```
+
+Advanced Usage (Custom Prompt):
+```powershell
+.\windows_launch.ps1 --prompt "Analyze the complexity of this algorithm." --chat_style phi4
+```
+
+Manual Execution (Debug):
+If you are debugging in VS Code, ensure your `launch.json` includes:
+```json
+"env": {
+    "OV_NPU_LOG_LEVEL": "LOG_INFO",
+    "ZE_AFFINITY_MASK": "0.0",
+    "ZE_ENABLE_PCI_ID_DEVICE_ORDER": "1"
+}
+```
+
+--------------------------------------------------------------------------------
+7. TROUBLESHOOTING
+--------------------------------------------------------------------------------
+A. **"Device Lost" or Hangs:**
+   - Cause: NPU thermal throttling or memory fragmentation.
+   - Fix: Ensure `ZE_AFFINITY_MASK` is set. Restart the script. The script automatically clears `C:/Super-Intel-NPU/cache/cache_npu` if corruption is detected.
+
+B. **32GB Aperture Not Visible:**
+   - Cause: Driver conflict or NVIDIA interference.
+   - Fix: Run `verify_npu_isolation.py`. If "GPU" is seen, check your System Environment variables and ensure `ZE_AFFINITY_MASK=0.0` is active.
+
+C. **Path Length Errors:**
+   - Windows has a 260 char limit.
+   - We map caches to `C:/Super-Intel-NPU/` to keep paths short. Ensure you have write permissions to `C:/`.
+
+D. **"Model not found":**
+   - Ensure `bake_phi4.py` completed successfully and populated `models/model_CURRENT`.
