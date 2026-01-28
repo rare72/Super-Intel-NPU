@@ -23,28 +23,37 @@ def setup_logging():
 
 def bake_phi4(staging_dir, output_dir):
     logger = setup_logging()
+
+    # ENSURE DIRECTORIES EXIST (Windows Fix)
+    # Resolve absolute paths to avoid confusion and ensure compatibility
+    staging_dir = os.path.abspath(staging_dir)
+    output_dir = os.path.abspath(output_dir)
+
+    try:
+        os.makedirs(staging_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        sys.exit(1)
+
     logger.info(f"--- Phi-4 Bake Process ---")
     logger.info(f"Target Model: {MODEL_ID} (GPU Branch)")
+    logger.info(f"Staging Directory: {staging_dir}")
+    logger.info(f"Output Directory:  {output_dir}")
 
     # 1. Download (Phase 1)
     logger.info(f">>> [Phase 1] Downloading Model to {staging_dir}...")
 
+    # Check if download already exists (User might have manually downloaded)
+    # If directory is not empty, assume download is present or partially present
+    if os.path.exists(staging_dir) and os.listdir(staging_dir):
+        logger.info(f"Directory {staging_dir} is not empty. Assuming files exist or resuming.")
+
     model_name_clean = MODEL_ID.split("/")[-1]
-    hf_cache_path = f"/Super-Intel-NPU/cache/model_{model_name_clean}"
+    # Use valid Windows path for cache if possible, or relative
+    hf_cache_path = os.path.abspath(f"cache/model_{model_name_clean}")
 
     try:
-        # We download to staging_dir (model/model_template)
-        # Note: The prompt instructions say: "download microsoft/phi-4-onnx --include gpu/*"
-        # Since it's an ONNX repo, it likely has .onnx files.
-        # However, Phase 2 instructions say: "Use optimum-cli to convert the Phi-4 model... --task text-generation-with-past"
-        # Optimum-CLI usually takes a PyTorch model as input for export, OR it can optimize an existing ONNX.
-        # IF the repo is already ONNX, optimum-cli export might not be the right command if we are just Quantizing.
-        # BUT, the instructions explicitly said: "optimum-cli export openvino ... --model microsoft/phi-4-onnx"
-        # This implies optimum-cli handles the ONNX->OpenVINO conversion or PyTorch->OpenVINO.
-        # Given "microsoft/phi-4-onnx" is the ID, it might be pre-exported.
-        # BUT, the instructions usually imply starting from a base or following a specific NPU conversion path.
-        # Let's follow the instruction: Download first, then run optimum-cli pointing to it.
-
         snapshot_download(
             repo_id=MODEL_ID,
             local_dir=staging_dir,
@@ -58,44 +67,62 @@ def bake_phi4(staging_dir, output_dir):
         sys.exit(1)
 
     # 2. Convert/Quantize (Phase 2)
-    # Output to model/model_staging
-    conversion_dir = "model/model_staging"
+    conversion_dir = os.path.abspath("model/model_staging")
     if os.path.exists(conversion_dir):
         shutil.rmtree(conversion_dir)
     os.makedirs(conversion_dir, exist_ok=True)
 
-    logger.info(f">>> [Phase 2] Converting to OpenVINO IR (INT4) at {conversion_dir}...")
+    logger.info(f">>> [Phase 2] Converting to OpenVINO IR at {conversion_dir}...")
 
-    # Construct optimum-cli command
-    # optimum-cli export openvino --model <INPUT> --task text-generation-with-past --weight-format int4 --sym --ratio 1.0 --group-size 128 <OUTPUT>
-
-    # Input is the downloaded directory. However, because we downloaded 'gpu/*' subfolder, the actual model might be in staging_dir/gpu/gpu-int4-rtn-block-32 etc.
-    # We need to find the specific folder containing the model file.
-    # For now, let's point to staging_dir and assume optimum figures it out or we point to the GPU subfolder.
-    # If the user said "Download gpu/*", and we used local_dir=staging_dir, then the files are in staging_dir/gpu/...
-
-    # Let's search for the folder containing .onnx files or config.json
+    # Robust Input Directory Resolution (Windows recursive search)
     target_input_dir = staging_dir
+    is_onnx_source = False
+
+    # Walk to find the actual model files (handling gpu/ subfolders)
     for root, dirs, files in os.walk(staging_dir):
+        # Look for typical model files
         if any(f.endswith(".onnx") for f in files) or "config.json" in files:
-            # Heuristic: Prefer the deepest folder with onnx files or config
-            # specifically looking for the gpu one
-            if "gpu" in root:
+             # Heuristic: if 'gpu' is in path, it's likely the one we want
+             if "gpu" in root.lower():
                 target_input_dir = root
+                if any(f.endswith(".onnx") for f in files):
+                    is_onnx_source = True
                 break
 
     logger.info(f"    > Resolved Input Directory: {target_input_dir}")
 
-    cmd = [
-        "optimum-cli", "export", "openvino",
-        "--model", target_input_dir,
-        "--task", "text-generation-with-past",
-        "--weight-format", "int4",
-        "--sym",
-        "--ratio", "1.0",
-        "--group-size", "128",
-        conversion_dir
-    ]
+    # Toolchain Selection based on Source Type
+    if is_onnx_source:
+        logger.info("    > Detected ONNX source files. Switching to 'ovc' (OpenVINO Converter).")
+        onnx_file = next((f for f in os.listdir(target_input_dir) if f.endswith(".onnx")), None)
+
+        if not onnx_file:
+            logger.error("No ONNX file found in target directory despite detection.")
+            sys.exit(1)
+
+        input_model_path = os.path.join(target_input_dir, onnx_file)
+
+        # OVC Command for ONNX -> IR
+        cmd = [
+            "ovc",
+            input_model_path,
+            "--output_model", os.path.join(conversion_dir, "openvino_model.xml"),
+            # Note: We do NOT pass --weight-format here as ovc handles compression differently
+            # and source is likely already quantized (int4).
+        ]
+    else:
+        logger.info("    > Detected PyTorch source. Using optimum-cli.")
+        # Reverted to INT4 per user instruction to "IGNORE INT4/INT8 conversion"
+        cmd = [
+            "optimum-cli", "export", "openvino",
+            "--model", target_input_dir,
+            "--task", "text-generation-with-past",
+            "--weight-format", "int4",
+            "--sym",
+            "--ratio", "1.0",
+            "--group-size", "128",
+            conversion_dir
+        ]
 
     logger.info(f"    > Executing: {' '.join(cmd)}")
     try:
