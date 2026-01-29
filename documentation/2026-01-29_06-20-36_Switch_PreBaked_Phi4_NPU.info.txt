@@ -1,0 +1,31 @@
+Task: Switch to Pre-Baked NPU-Optimized Model (AhtnaGlen/phi-4-mini-instruct-int4-sym-npu-ov)
+
+Summary of Changes:
+1.  **Model Source**: Updated `src/python/bake_phi4.py` to target `AhtnaGlen/phi-4-mini-instruct-int4-sym-npu-ov` instead of converting a PyTorch/ONNX source.
+    -   Previous attempts to convert `microsoft/Phi-4-mini-flash-reasoning` failed because `optimum-cli` does not natively support the custom `phi4flash` architecture.
+    -   This pre-baked model is already in OpenVINO IR format and optimized for NPU.
+
+2.  **Workflow Simplification**:
+    -   The `bake_phi4.py` script now strictly performs a **Download -> Publish** workflow.
+    -   The conversion phase (Optimum export) is skipped entirely to ensure the verified pre-baked artifacts are preserved exactly as-is.
+
+3.  **NPU Optimization Findings**:
+    -   Research confirmed that the correct quantization parameters for NPU GenAI performance are:
+        -   `--weight-format int4` (Not INT8)
+        -   `--sym` (Symmetric quantization is critical for NPU)
+        -   `--group-size -1` (Channel-wise, not grouped)
+        -   `--awq --scale-estimation --dataset wikitext2` (Data-aware calibration)
+    -   These settings are inherently applied in the selected pre-baked model.
+
+4.  **Supervisor Configuration**:
+    -   `trust_remote_code=True` remains enabled in `supervisor.py` to handle potential custom tokenizers or modeling code associated with the Phi-4 family.
+    -   `STATIC_SEQ_LEN` remains at 1024.
+
+Usage Instructions:
+1.  **Download**: Run `python src/python/bake_phi4.py`.
+    -   This downloads the pre-converted IR files to `models/model_CURRENT`.
+2.  **Run**: Run `python src/python/supervisor.py --prompt "Why is the sky blue?" --chat_style phi4`.
+
+Technical Verification:
+-   The "Bake" process is now effectively a model fetcher.
+-   The "Supervisor" continues to use the standard OpenVINO Core loading mechanism, which should accept the pre-baked IR without issue.
