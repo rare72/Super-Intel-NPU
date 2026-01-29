@@ -9,9 +9,9 @@ from transformers import AutoTokenizer
 
 # --- CONFIGURATION ---
 MODEL_ID = "microsoft/phi-4-onnx"
-# Per instructions: Download GPU branch
+# Per instructions: Switch to CPU branch for better NPU OpSet compatibility (NullNode Fix)
 REVISION_BRANCH = "main" # The repo structure seems to be folders, not branches, but we filter by allow_patterns
-ALLOW_PATTERNS = ["gpu/*"]
+ALLOW_PATTERNS = ["cpu_and_mobile/*"]
 
 def setup_logging():
     logging.basicConfig(
@@ -37,7 +37,7 @@ def bake_phi4(staging_dir, output_dir):
         sys.exit(1)
 
     logger.info(f"--- Phi-4 Bake Process ---")
-    logger.info(f"Target Model: {MODEL_ID} (GPU Branch)")
+    logger.info(f"Target Model: {MODEL_ID} (CPU Branch for NPU compatibility)")
     logger.info(f"Staging Directory: {staging_dir}")
     logger.info(f"Output Directory:  {output_dir}")
 
@@ -82,8 +82,8 @@ def bake_phi4(staging_dir, output_dir):
     for root, dirs, files in os.walk(staging_dir):
         # Look for typical model files
         if any(f.endswith(".onnx") for f in files) or "config.json" in files:
-             # Heuristic: if 'gpu' is in path, it's likely the one we want
-             if "gpu" in root.lower():
+             # Heuristic: if 'cpu' is in path, it's likely the one we want
+             if "cpu" in root.lower():
                 target_input_dir = root
                 if any(f.endswith(".onnx") for f in files):
                     is_onnx_source = True
