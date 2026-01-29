@@ -81,7 +81,7 @@ class OfferingSupervisor:
         if target_path:
             print(f"[Supervisor] Loading Tokenizer from: {target_path}...")
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained(target_path)
+                self.tokenizer = AutoTokenizer.from_pretrained(target_path, trust_remote_code=True)
                 # Padding is critical for static shapes
                 if self.tokenizer.pad_token is None:
                     self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -185,7 +185,8 @@ class OfferingSupervisor:
                     device=self.device,
                     ov_config={"CACHE_DIR": cache_dir, "PERFORMANCE_HINT": "LATENCY"},
                     compile=True,
-                    use_cache=try_cache
+                    use_cache=try_cache,
+                    trust_remote_code=True
                 )
                 self.request = self.model.request
                 self.use_cache_state = try_cache

@@ -8,10 +8,11 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 # --- CONFIGURATION ---
-MODEL_ID = "microsoft/phi-4-onnx"
-# Per instructions: Switch to CPU branch for better NPU OpSet compatibility (NullNode Fix)
-REVISION_BRANCH = "main" # The repo structure seems to be folders, not branches, but we filter by allow_patterns
-ALLOW_PATTERNS = ["cpu_and_mobile/*"]
+MODEL_ID = "microsoft/Phi-4-mini-flash-reasoning"
+# PyTorch Model - No specific revision branch logic needed for simple download
+REVISION_BRANCH = "main"
+# Download everything (no specific pattern filtering needed for PyTorch typically, but good to avoid massive unused files if any)
+ALLOW_PATTERNS = None
 
 def setup_logging():
     logging.basicConfig(
@@ -19,7 +20,7 @@ def setup_logging():
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[logging.StreamHandler(sys.stdout)]
     )
-    return logging.getLogger("BakePhi4")
+    return logging.getLogger("BakePhi4Flash")
 
 def bake_phi4(staging_dir, output_dir):
     logger = setup_logging()
@@ -36,8 +37,8 @@ def bake_phi4(staging_dir, output_dir):
         logger.error(f"Failed to create directories: {e}")
         sys.exit(1)
 
-    logger.info(f"--- Phi-4 Bake Process ---")
-    logger.info(f"Target Model: {MODEL_ID} (CPU Branch for NPU compatibility)")
+    logger.info(f"--- Phi-4-Mini-Flash-Reasoning Bake Process ---")
+    logger.info(f"Target Model: {MODEL_ID}")
     logger.info(f"Staging Directory: {staging_dir}")
     logger.info(f"Output Directory:  {output_dir}")
 
@@ -58,7 +59,6 @@ def bake_phi4(staging_dir, output_dir):
             repo_id=MODEL_ID,
             local_dir=staging_dir,
             cache_dir=hf_cache_path,
-            allow_patterns=ALLOW_PATTERNS,
             local_dir_use_symlinks=False
         )
         logger.info("[Success] Download complete.")
@@ -74,55 +74,20 @@ def bake_phi4(staging_dir, output_dir):
 
     logger.info(f">>> [Phase 2] Converting to OpenVINO IR at {conversion_dir}...")
 
-    # Robust Input Directory Resolution (Windows recursive search)
+    # PyTorch Source -> Optimum CLI
+    # target_input_dir is just the staging root since it's a direct download
     target_input_dir = staging_dir
-    is_onnx_source = False
 
-    # Walk to find the actual model files (handling gpu/ subfolders)
-    for root, dirs, files in os.walk(staging_dir):
-        # Look for typical model files
-        if any(f.endswith(".onnx") for f in files) or "config.json" in files:
-             # Heuristic: if 'cpu' is in path, it's likely the one we want
-             if "cpu" in root.lower():
-                target_input_dir = root
-                if any(f.endswith(".onnx") for f in files):
-                    is_onnx_source = True
-                break
-
-    logger.info(f"    > Resolved Input Directory: {target_input_dir}")
-
-    # Toolchain Selection based on Source Type
-    if is_onnx_source:
-        logger.info("    > Detected ONNX source files. Switching to 'ovc' (OpenVINO Converter).")
-        onnx_file = next((f for f in os.listdir(target_input_dir) if f.endswith(".onnx")), None)
-
-        if not onnx_file:
-            logger.error("No ONNX file found in target directory despite detection.")
-            sys.exit(1)
-
-        input_model_path = os.path.join(target_input_dir, onnx_file)
-
-        # OVC Command for ONNX -> IR
-        cmd = [
-            "ovc",
-            input_model_path,
-            "--output_model", os.path.join(conversion_dir, "openvino_model.xml"),
-            # Note: We do NOT pass --weight-format here as ovc handles compression differently
-            # and source is likely already quantized (int4).
-        ]
-    else:
-        logger.info("    > Detected PyTorch source. Using optimum-cli.")
-        # Reverted to INT4 per user instruction to "IGNORE INT4/INT8 conversion"
-        cmd = [
-            "optimum-cli", "export", "openvino",
-            "--model", target_input_dir,
-            "--task", "text-generation-with-past",
-            "--weight-format", "int4",
-            "--sym",
-            "--ratio", "1.0",
-            "--group-size", "128",
-            conversion_dir
-        ]
+    logger.info("    > Detected PyTorch source. Using optimum-cli.")
+    # INT8 Conversion requested
+    cmd = [
+        "optimum-cli", "export", "openvino",
+        "--model", target_input_dir,
+        "--task", "text-generation-with-past",
+        "--weight-format", "int8", # INT8 QUANTIZATION
+        "--trust-remote-code", # REQUIRED for Phi-4-mini-flash-reasoning (custom code)
+        conversion_dir
+    ]
 
     logger.info(f"    > Executing: {' '.join(cmd)}")
     try:
@@ -143,14 +108,15 @@ def bake_phi4(staging_dir, output_dir):
     # 4. Tokenizer Handling
     # Ensure tokenizer is present. If optimum-cli didn't copy it (sometimes it doesn't if input was ONNX), copy from source.
     try:
-        tokenizer = AutoTokenizer.from_pretrained(target_input_dir)
+        # Trust remote code for tokenizer as well
+        tokenizer = AutoTokenizer.from_pretrained(target_input_dir, trust_remote_code=True)
         tokenizer.save_pretrained(output_dir)
         logger.info("[Success] Tokenizer verified/saved.")
     except:
         logger.warning("Could not auto-load tokenizer from input dir. Manually checking for files...")
         # Copy tokenizer files manually if they exist
         for f in os.listdir(target_input_dir):
-            if "token" in f or "vocab" in f:
+            if "token" in f or "vocab" in f or "special_tokens" in f:
                 shutil.copy2(os.path.join(target_input_dir, f), os.path.join(output_dir, f))
 
 if __name__ == "__main__":

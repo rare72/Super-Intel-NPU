@@ -1,0 +1,27 @@
+Task: Switch to Phi-4-mini-flash-reasoning and Enable INT8 Quantization
+
+Summary of Changes:
+1.  **Model Switch**: Updated `src/python/bake_phi4.py` to target `microsoft/Phi-4-mini-flash-reasoning` instead of the previous `microsoft/phi-4-onnx` model.
+    -   The previous ONNX model contained custom operators (`GroupQueryAttention` from `com.microsoft`) incompatible with the current OpenVINO NPU driver, causing crashes even in CPU/Mobile variants.
+    -   Switching to the PyTorch-based "Flash Reasoning" model allows us to perform a clean export to OpenVINO IR using standard operators.
+
+2.  **INT8 Quantization**:
+    -   Configured `bake_phi4.py` to use `optimum-cli` with `--weight-format int8`.
+    -   This fulfills the user's requirement for INT8 weights, which was previously impossible with the pre-quantized INT4 ONNX source.
+
+3.  **Custom Code Support**:
+    -   Added `--trust-remote-code` to the export command in `bake_phi4.py` and to the tokenizer/model loading in `supervisor.py`.
+    -   This is mandatory for `Phi-4-mini-flash-reasoning` as it utilizes custom architecture code (`Phi4Flash`).
+
+4.  **Context Window**:
+    -   Retained the increased `STATIC_SEQ_LEN = 1024` in `supervisor.py` to support larger reasoning contexts.
+
+Usage Instructions:
+1.  **Bake**: Run `python src/python/bake_phi4.py`.
+    -   This will download the PyTorch model and convert it to OpenVINO INT8 IR.
+    -   **Note**: Ensure internet access is available as this pulls from Hugging Face.
+2.  **Run**: Run `python src/python/supervisor.py --prompt "Explain quantum entanglement" --chat_style phi4`.
+
+Technical Notes:
+-   The conversion uses `task="text-generation-with-past"` (Stateful), but the NPU supervisor prefers "Strict Static Loading". The supervisor includes fallback logic to handle both, but primarily attempts to load the model graph directly via `ov.Core`.
+-   If the NPU driver fails to compile the custom "Flash" attention implementation even after export, the supervisor will fallback to `Optimum-Intel` (CPU/GPU) execution.
