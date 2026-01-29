@@ -20,7 +20,7 @@ import openvino as ov
 DEFAULT_SHM_NAME = "/offering_tensor_shm"
 DEFAULT_REPORT_PIPE = "/tmp/offering_report"
 DEFAULT_COMMAND_PIPE = "/tmp/offering_command"
-STATIC_SEQ_LEN = 128 # Must match bake_model.py
+STATIC_SEQ_LEN = 1024 # Must match bake_model.py
 
 class OfferingSupervisor:
     def __init__(self, model_xml=None, tokenizer_id=None, shm_name=DEFAULT_SHM_NAME, device="NPU"):
