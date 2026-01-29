@@ -29,3 +29,4 @@ src/python/__pycache__/
 /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/src/python/scripts_user-reported-broken/
 /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/src/python/llama.cpp/
 /home/phil2/Super-Intel-NPU/current/Super-Intel-NPU/src/python/__pycache__/
+cache/model_phi-4-onnx/models--microsoft--phi-4-onnx/refs/main
